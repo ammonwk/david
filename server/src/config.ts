@@ -8,6 +8,10 @@ const __dirname = path.dirname(__filename);
 // Load .env from project root
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
+function parseCLIBackend(value: string | undefined): 'claude' | 'codex' {
+  return value === 'codex' ? 'codex' : 'claude';
+}
+
 export const config = {
   // Server
   port: parseInt(process.env.PORT || '3001', 10),
@@ -46,8 +50,14 @@ export const config = {
   worktreesDir: path.resolve(__dirname, '../../worktrees'),
   projectRoot: path.resolve(__dirname, '../..'),
 
+  // CLI backend
+  cliBackend: parseCLIBackend(process.env.CLI_BACKEND),
+
   // Claude CLI
   claudeBinary: process.env.CLAUDE_BINARY || 'claude',
+
+  // Codex CLI
+  codexBinary: process.env.CODEX_BINARY || 'codex',
 
   // Scan defaults
   defaultScanTimeSpan: '5m' as const,

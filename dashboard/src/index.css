@@ -1,0 +1,319 @@
+@import "tailwindcss";
+
+/* ────────────────────────────────────────────────────────────
+   David — AI SRE Dashboard
+   Theme variables are applied at runtime via lib/theme.ts.
+   The :root block below provides the dark-theme defaults so
+   the page renders correctly before JS initializes.
+   ──────────────────────────────────────────────────────────── */
+
+:root {
+  /* Dark theme defaults (overridden by JS on load) */
+  --bg-primary: #0a0a0f;
+  --bg-secondary: #12121a;
+  --bg-tertiary: #1a1a2e;
+  --bg-card: #16162a;
+  --border-color: #2a2a4a;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent-blue: #3b82f6;
+  --accent-purple: #7c3aed;
+  --accent-violet: #8b5cf6;
+  --accent-green: #10b981;
+  --accent-amber: #f59e0b;
+  --accent-yellow: #f59e0b;
+  --accent-orange: #f97316;
+  --accent-red: #ef4444;
+}
+
+/* ── Base ──────────────────────────────────────────────────── */
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+/* Code / terminal text */
+code,
+pre,
+.font-mono {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+/* Tabular numbers for counters & numeric displays */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Scrollbar — Webkit ───────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ── Scrollbar — Firefox ──────────────────────────────────── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) var(--bg-secondary);
+}
+
+/* ── Status colors ────────────────────────────────────────── */
+
+.status-healthy {
+  color: var(--accent-green);
+}
+
+.status-warning {
+  color: var(--accent-amber);
+}
+
+.status-critical {
+  color: var(--accent-red);
+}
+
+.status-idle {
+  color: var(--text-muted);
+}
+
+/* ── Glow effects (dark theme) ────────────────────────────── */
+
+[data-theme="dark"] .glow-blue {
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4), 0 0 4px rgba(59, 130, 246, 0.2);
+}
+
+[data-theme="dark"] .glow-purple {
+  box-shadow: 0 0 12px rgba(124, 58, 237, 0.4), 0 0 4px rgba(124, 58, 237, 0.2);
+}
+
+[data-theme="dark"] .glow-green {
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.4), 0 0 4px rgba(16, 185, 129, 0.2);
+}
+
+[data-theme="dark"] .glow-red {
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.4), 0 0 4px rgba(239, 68, 68, 0.2);
+}
+
+/* ── Subtle accents (light theme) ─────────────────────────── */
+
+[data-theme="light"] .glow-blue {
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.15), 0 1px 3px rgba(37, 99, 235, 0.1);
+}
+
+[data-theme="light"] .glow-purple {
+  box-shadow: 0 0 0 1px rgba(109, 40, 217, 0.15), 0 1px 3px rgba(109, 40, 217, 0.1);
+}
+
+[data-theme="light"] .glow-green {
+  box-shadow: 0 0 0 1px rgba(5, 150, 105, 0.15), 0 1px 3px rgba(5, 150, 105, 0.1);
+}
+
+[data-theme="light"] .glow-red {
+  box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.15), 0 1px 3px rgba(220, 38, 38, 0.1);
+}
+
+/* ── Card & surface helpers ───────────────────────────────── */
+
+[data-theme="light"] .bg-card,
+[data-theme="light"] [class*="bg-card"] {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+/* ── Animation keyframes ──────────────────────────────────── */
+
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slide-in-panel-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(59, 130, 246, 0.6);
+  }
+}
+
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Animation utility classes ────────────────────────────── */
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s ease-in-out infinite;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.2s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.2s ease-out;
+}
+
+.animate-slide-in-panel-right {
+  animation: slide-in-panel-right 0.3s ease-out;
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 2s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 3s linear infinite;
+}
+
+/* ── Toast animations ─────────────────────────────────────── */
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes toast-exit {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+.animate-toast-enter {
+  animation: toast-enter 250ms ease-out;
+}
+
+.animate-toast-exit {
+  animation: toast-exit 250ms ease-in forwards;
+}
+
+/* ── Command Palette animations ───────────────────────────── */
+
+@keyframes palette-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-palette-enter {
+  animation: palette-enter 200ms ease-out;
+}
+
+/* ── Purposeful transitions (150-300ms per spec) ──────────── */
+
+.transition-theme {
+  transition: background-color 200ms ease, color 200ms ease,
+    border-color 200ms ease, box-shadow 200ms ease;
+}

@@ -437,10 +437,16 @@ export interface UpdateScheduleRequest {
 
 /** Response describing current schedule configuration and next run times. */
 export interface ScheduleStatusResponse {
-  scan: ScanScheduleConfig;
-  audit: AuditScheduleConfig;
-  nextScanRun?: Date;
-  nextAuditRun?: Date;
+  scan: ScanScheduleConfig & {
+    isRunning: boolean;
+    lastRunAt: Date | null;
+    nextRunAt: Date | null;
+  };
+  audit: AuditScheduleConfig & {
+    isRunning: boolean;
+    lastRunAt: Date | null;
+    nextRunAt: Date | null;
+  };
 }
 
 /** Response for the agent pool status endpoint. */
@@ -490,6 +496,10 @@ export interface ActivityEvent {
   timestamp: Date;
   severity?: 'info' | 'success' | 'warning' | 'error';
   link?: { label: string; url: string };
+  /** ID of the parent event that caused this one (for causal chain grouping) */
+  parentId?: string;
+  /** Source entity ID (scanId, bugId, agentId, prId) for cross-referencing */
+  sourceId?: string;
 }
 
 // ============================================
@@ -506,4 +516,71 @@ export interface OverviewStats {
   lastScanAt?: Date;
   lastAuditAt?: Date;
   systemStatus: 'running' | 'paused' | 'error';
+}
+
+// ============================================
+// Theme
+// ============================================
+
+/** Light/dark/system theme preference. */
+export type ThemeMode = 'light' | 'dark' | 'system';
+
+// ============================================
+// Command Palette
+// ============================================
+
+/** An action available in the Cmd+K command palette. */
+export interface CommandPaletteAction {
+  id: string;
+  label: string;
+  category: 'action' | 'agent' | 'bug' | 'pr' | 'topology';
+  icon?: string;
+  shortcut?: string;
+  handler?: () => void;
+}
+
+// ============================================
+// Toast Notifications
+// ============================================
+
+/** Severity / style of a toast notification. */
+export type ToastType = 'info' | 'success' | 'warning' | 'error';
+
+/** A transient notification shown in the top-right corner. */
+export interface Toast {
+  id: string;
+  type: ToastType;
+  message: string;
+  link?: { label: string; url: string };
+  duration?: number; // ms, default 5000
+}
+
+// ============================================
+// Kanban Pipeline
+// ============================================
+
+/** Column identifiers for the PR pipeline kanban board. */
+export type PipelineColumn = 'reported' | 'verifying' | 'fixing' | 'pr-open' | 'merged' | 'closed';
+
+/** A card on the kanban board combining bug report + PR info. */
+export interface PipelineItem {
+  id: string;
+  column: PipelineColumn;
+  bugReport: BugReport;
+  pr?: PullRequestRecord;
+  agentIds: string[];
+  area?: string; // L1 > L2 label
+  diffStat?: { additions: number; deletions: number };
+}
+
+// ============================================
+// Health Vitals
+// ============================================
+
+/** Time-series data for the Command Center health vitals charts. */
+export interface HealthVitals {
+  errorRate24h: Array<{ timestamp: Date; value: number }>;
+  agentThroughput24h: Array<{ timestamp: Date; value: number }>;
+  queueDepth24h: Array<{ timestamp: Date; value: number }>;
+  prAcceptanceRate7d: Array<{ timestamp: Date; value: number }>;
 }

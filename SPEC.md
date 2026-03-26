@@ -17,8 +17,8 @@ David is an autonomous AI SRE that continuously monitors logs and audits codebas
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        David Dashboard (React)                       │
 │  ┌───────────┐ ┌──────────────┐ ┌────────────┐ ┌────────────────┐  │
-│  │ Overview   │ │ Log Scanner  │ │ Codebase   │ │ Agent Monitor  │  │
-│  │ Dashboard  │ │ Config+Runs  │ │ Topology   │ │ + PR Tracker   │  │
+│  │ Command    │ │ Log Scanner  │ │ Zoomable   │ │ Agent Monitor  │  │
+│  │ Center     │ │ + Heatmap    │ │ Treemap    │ │ + PR Pipeline  │  │
 │  └───────────┘ └──────────────┘ └────────────┘ └────────────────┘  │
 └─────────────────────────┬───────────────────────────────────────────┘
                           │ WebSocket + REST
@@ -168,11 +168,13 @@ Each audit agent is a Claude Code CLI subprocess in its own git worktree (branch
 │         Fix Sub-Agents              │
 │  (one per confirmed bug)            │
 │  Write fix, verify fix passes,      │
-│  run existing tests                 │
+│  run existing tests, open PR,       │
+│  then babysit CI + address reviews  │
+│  in a loop until fully green & clean│
 └──────────────┬──────────────────────┘
-               │ Fixed + verified
+               │ PR green + reviewed
                ▼
-         Create PR per fix
+         Done — PR ready for merge
 ```
 
 ### 3.4 Verification Standards
@@ -261,12 +263,12 @@ All agent stdout is:
 
 ### 5.1 PR Creation Flow
 
-When a fix agent completes successfully:
+The fix agent itself handles the full PR lifecycle:
 
 1. `git add -A` in the agent's worktree
 2. `git commit -m "[SRE] {concise description of fix}"`
 3. `git push origin sre/{bugId}`
-4. Create PR via Octokit:
+4. Create PR via `gh pr create`:
    - **Title:** `[SRE] {description}`
    - **Labels:** `autofix`
    - **Base:** `staging`
@@ -278,6 +280,16 @@ When a fix agent completes successfully:
      - Verification (how the fix was verified — test output, reproduction results)
      - Risk assessment (what could go wrong)
      - Link back to David dashboard for full audit trail
+
+### 5.1.1 CI Babysitting and Review Loop
+
+Once the PR is open, the fix agent enters a loop:
+
+1. **Watch CI** — run `gh run watch` to monitor the CI pipeline until completion. If any check fails, read the failure logs, fix the issue, commit, and push. Repeat until all checks are green.
+2. **Read PR comments** — use `gh api` to read all comments and review comments on the PR. For each piece of actionable feedback, make the requested change, commit, and push.
+3. **Loop** — return to step 1. Repeat this cycle until CI is fully green AND there are no unaddressed comments.
+
+The agent only reports completion and stops once both conditions are satisfied. This ensures PRs are not abandoned in a failing or unreviewed state.
 
 ### 5.2 PR Description Generation
 
@@ -353,124 +365,255 @@ When spawning new agents, include in their system prompt:
 
 ## 7. Dashboard UI
 
-### 7.1 Layout
+### 7.1 Design System
 
-Single-page app with a sidebar navigation:
+**Theme — Light and Dark:**
+- Light and dark modes, toggled via the top bar. System preference detected on first load.
+- Dark: near-black backgrounds (`#0a0a0f`), soft white text, colored accents with subtle glow
+- Light: warm off-white backgrounds, dark text, matte colored accents
+- Accent palette: blue (info/agents), amber (warnings), red (errors/critical), green (success/merged), violet (audit activity)
+
+**Typography:**
+- UI text: Inter (or system sans-serif fallback)
+- Code and agent output: JetBrains Mono (or system monospace)
+- Counters and numeric displays: `font-variant-numeric: tabular-nums` for alignment
+
+**Motion:**
+- All transitions are purposeful and subtle — easing durations 150–300ms
+- Live-updating numbers use spring interpolation (count up/down smoothly)
+- No decorative animation. Every moving element communicates a state change.
+
+**Density:**
+- Information-dense by default. Tooltips and drawers provide depth on demand.
+- No hero sections, no excessive whitespace. Every pixel earns its place.
+
+### 7.2 Global Shell
 
 ```
-┌──────┬──────────────────────────────────────────────┐
-│      │                                              │
-│  📊  │   Main Content Area                          │
-│  O   │                                              │
-│  v   │   (changes based on selected nav item)       │
-│  e   │                                              │
-│  r   │                                              │
-│  v   │                                              │
-│  i   │                                              │
-│  e   │                                              │
-│  w   │                                              │
-│      │                                              │
-│  🔍  │                                              │
-│  L   │                                              │
-│  o   │                                              │
-│  g   │                                              │
-│  s   │                                              │
-│      │                                              │
-│  🗺️  │                                              │
-│  M   │                                              │
-│  a   │                                              │
-│  p   │                                              │
-│      │                                              │
-│  🤖  │                                              │
-│  A   │                                              │
-│  g   │                                              │
-│  e   │                                              │
-│  n   │                                              │
-│  t   │                                              │
-│  s   │                                              │
-│      │                                              │
-│  📝  │                                              │
-│  P   │                                              │
-│  R   │                                              │
-│  s   │                                              │
-│      │                                              │
-└──────┴──────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│ ● David    3 agents active │ 2 queued │ last scan 4m ago │ 12 PRs  │◑│
+├──────┬──────────────────────────────────────────────────────────────┤
+│      │                                                              │
+│  ◉   │                                                              │
+│      │                                                              │
+│  ◎   │              Main Content Area                               │
+│      │                                                              │
+│  ◫   │              (per-page views described below)                │
+│      │                                                              │
+│  ⚙   │                                                              │
+│      │                                                              │
+│  ↗   │                                                              │
+│      │                                                              │
+├──────┴──────────────────────────────────────────────────────────────┤
+│  ▸ Agent sre-4a2f completed: 1 bug verified, PR #287 created       │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 7.2 Overview Dashboard
+**Top bar (always visible):**
+- Left: David wordmark + system health indicator (green dot = healthy, amber = degraded, red = error)
+- Center: live counters — active agents, queued agents, time since last scan, open PRs. Numbers animate smoothly on change.
+- Right: theme toggle (sun/moon), settings
 
-- **System status:** running/paused, next scheduled scan, agents active/queued/completed
-- **Live counters:** bugs found today, PRs created today, PRs accepted this week
-- **Activity feed:** real-time stream of events (scan started, bug found, agent spawned, PR created, PR merged)
-- **Health sparklines:** agent success rate, scan frequency, queue depth over last 24h
+**Sidebar (always visible, icon-only at rest, expands on hover to show labels):**
+- Pages: Command Center, Log Scanner, Codebase Map, Agent Monitor, PR Pipeline
+- Active page indicated by accent-colored bar on left edge
+- Compact — takes minimal horizontal space
 
-### 7.3 Log Scanner Page
+**Bottom event bar (always visible):**
+- Single-line ticker showing the most recent system event with a subtle entrance animation
+- Click to expand into a full activity feed overlay
 
-- **Config panel:**
-  - Time span selector (5m / 15m / 1h / 6h / 24h)
-  - Severity filter (all / warn+error / error)
-  - Schedule toggle (on/off) with interval display
-  - "Scan Now" button
-- **Results panel:**
-  - Timeline of past scans with status badges
-  - Click a scan to see: raw log patterns, identified issues, agents spawned
-  - Diff view: what changed since last scan
+**Command palette (`Cmd+K` / `Ctrl+K`):**
+- Search across agents, bugs, PRs, topology nodes, and actions
+- Shows recent items and quick actions (trigger scan, pause scheduler, re-map codebase)
 
-### 7.4 Codebase Topology Page
+**Toast notifications:**
+- Slide in from top-right for high-signal events: bug found, PR created, PR merged, agent failure
+- Click to navigate to the relevant detail view
+- Auto-dismiss after 5s, stack up to 3
 
-- **Interactive hierarchy graph** (force-directed or tree layout):
-  - L1 nodes as large clusters
-  - L2 nodes as medium clusters within L1
-  - L3 nodes as leaf nodes within L2
-  - Color coding: green = recently audited clean, yellow = has open issues, red = has unresolved bugs
-  - Size scaled by line count
-  - Click a node to see: files, description, last audit time, open issues
-- **Actions:**
-  - "Re-map Codebase" button (re-runs the full topology discovery)
-  - "Audit Selected" button — select one or more nodes, then click to trigger an audit of just those nodes
-  - "Audit All" button — full codebase audit
-- **Node detail panel** (on click):
-  - File list with line counts
-  - Recent bugs in this area
-  - PR history for this area
-  - Last audit timestamp and findings
+**Keyboard shortcuts:**
+- `Cmd+K` — command palette
+- `1–5` — navigate to pages
+- `n` / `p` — next/previous item in lists
+- `Enter` — expand or open selected item
+- `Esc` — close drawer, modal, or palette
 
-### 7.5 Agent Monitor Page
+### 7.3 Command Center (Overview)
 
-- **Pool status bar:** `Active: 12/30 | Queued: 8 | Completed: 45 | Failed: 2`
-- **Agent cards** in a grid/list:
-  - Agent ID, type (log-analysis / audit / fix), target (node or bug)
-  - Status badge (starting / running / completed / failed / timeout)
-  - Runtime duration (live counter)
-  - Restart count
-  - Progress indicator (if available from agent output)
-  - "View Output" → opens a live-streaming terminal-style view of agent's stdout
-  - "Stop" button for running agents
-- **Queue view:** ordered list of pending tasks with estimated wait time
+The default landing page. A single-screen operational summary of everything David is doing.
 
-### 7.6 PR Tracker Page
+**Layout: three columns, full viewport height.**
 
-- **Table of all PRs** created by David:
-  - PR number (linked to GitHub), title, status (open/merged/closed), created date
-  - Bug source (log scan or codebase audit)
-  - Affected area (L1/L2/L3 node)
-  - Verification method used
-- **Filters:** by status, by scan type, by feature area, by date range
-- **Learning metrics panel:**
-  - Acceptance rate (overall and per-category)
-  - Chart: acceptance rate over time
-  - "What David is learning" — top patterns from accepted/rejected PRs
+**Left column — Agent Pool Gauge:**
+- Vertical bar visualization showing pool capacity (0–30)
+- Filled segments = active agents, colored by type (blue = analysis, violet = audit, green = fix)
+- Dimmed segments = queued agents
+- Each segment is hoverable (tooltip: agent ID, type, runtime) and clickable (navigates to agent detail)
+- Below the gauge: compact list of the 5 most recent agent completions with status badges
 
-### 7.7 Real-Time Updates
+**Center column — Live Event Timeline:**
+- Vertical, auto-scrolling timeline of system events
+- Each event: timestamp, type icon, one-line description, severity color on left edge
+- Event types: scan started/completed, bug reported, agent spawned/completed/failed, PR created, PR merged/closed
+- Related events grouped by causal chain (scan → bug → agent → PR) with subtle indentation
+- Clicking any event navigates to its detail view in the relevant page
+- New events animate in from the top with a brief highlight
 
-All pages receive live updates via WebSocket:
-- Agent status changes
-- New scan results
-- New bugs found
-- PR status changes
-- Queue movements
+**Right column — Health Vitals:**
+- Stacked mini area charts (~80px tall each):
+  - Error rate over last 24h (with baseline threshold line)
+  - Agent throughput (completed/hour) over last 24h
+  - Queue depth over last 24h
+  - PR acceptance rate (rolling 7-day window)
+- Hover any chart for exact values, click to expand to full detail
+- Below the charts: compact number grid — bugs found today, PRs created today, PRs merged this week, acceptance rate
 
-No polling. Pure push via Socket.IO.
+### 7.4 Log Scanner
+
+**Top: Heatmap Timeline**
+- Horizontal heatmap grid (similar to GitHub contributions, but horizontal) showing error/warning density per time bucket
+- X-axis: last 7 days bucketed by hour. Y-axis: severity levels.
+- Cell color intensity = log volume. Hover for exact counts.
+- Click a cell to filter the scan list below to that time range
+
+**Middle: Scan History**
+- Vertical list of past scans, newest first
+- Each row: timestamp, duration, config summary (timespan + severity), result badges (e.g., "3 new bugs, 1 resolved")
+- Expandable: click to reveal findings — list of identified issues with severity, pattern match, status
+- Click a finding to see evidence (log excerpts, pattern details) in a slide-out drawer
+
+**Config: slide-out drawer (gear icon in page header):**
+- Time span: segmented control (5m / 15m / 1h / 6h / 24h)
+- Severity filter: segmented control (all / warn+error / error)
+- Schedule: toggle on/off, interval display, next-run countdown timer
+- "Scan Now" button — prominent, primary accent color
+
+**Live scan indicator:**
+- When a scan is running, an animated progress bar appears in the page header
+- Below the heatmap: live status line — "Scanning... 4,231 log entries processed" with a counting animation
+
+### 7.5 Codebase Topology
+
+**Primary view: Zoomable Treemap**
+- Full-width treemap visualization (similar to WinDirStat / Disk Inventory X)
+- Each rectangle = a topology node. Size proportional to line count.
+- Color = health status:
+  - Muted green: recently audited, no open issues
+  - Amber: has open bug reports
+  - Red: has unresolved critical or high-severity bugs
+  - Gray: never audited
+- Three zoom levels corresponding to L1 → L2 → L3:
+  - Default view: L1 groups as large labeled rectangles (name + file count)
+  - Click an L1 to smooth-zoom into its L2 children (the clicked rectangle expands to fill the view)
+  - Click an L2 to zoom into L3. At L3 level, individual files appear as small cells within the rectangle.
+  - Breadcrumb trail at top for navigation: `All > Backend Services > Auth Module` — click any level to zoom back out
+
+**Activity overlay (toggleable via button in page header):**
+- Nodes being audited: animated dashed border ("scanning" effect)
+- Nodes with an active fix agent: small wrench icon badge
+- Nodes with a recently created PR: small PR icon badge
+
+**Actions (page header):**
+- "Re-map Codebase" — triggers full topology rediscovery
+- "Audit Selected" — enters selection mode: click nodes to select (highlighted border), then confirm to dispatch audit agents for those nodes
+- "Audit All" — full codebase audit, with confirmation dialog
+
+**Detail drawer (slides in from right on node click):**
+- Node name, description, level
+- File list with line counts
+- Audit history: timeline of past audits with findings count
+- Open bugs in this area (linked to their cards in PR Pipeline)
+- Related PRs with status badges
+
+### 7.6 Agent Monitor
+
+**View toggle in page header: Tree | Timeline**
+
+**Tree View (default):**
+- Hierarchical process tree showing agent parent→child relationships
+- Top-level agents (log-analysis, audit) are root nodes
+- Their sub-agents (verify, fix) are children, indented and connected by lines
+- Each node shows: agent type icon, target name, status badge, runtime counter (live-ticking for active agents)
+- Running agents: subtle pulse animation on status indicator
+- Completed: checkmark icon, muted styling
+- Failed/timeout: red indicator
+- Clicking a node opens the agent detail panel
+
+**Timeline View:**
+- Gantt-style horizontal bar chart
+- X-axis: wall clock time. Each agent is a horizontal bar.
+- Bar color = agent type, opacity encodes status (solid = running, faded = completed, hatched = failed)
+- Bars grouped by parent — sub-agents appear as nested rows below their parent
+- Visually shows concurrency: how many agents overlapped in time
+- Hover a bar for agent details tooltip
+
+**Agent Detail Panel (slides open on agent click):**
+- **Left pane — Live Output:** terminal-style viewer, monospaced font, auto-scrolling, ANSI color support. Streams agent stdout in real-time. Searchable via `Cmd+F`.
+- **Right pane — Context:** files being read/modified (compact file tree with activity indicators), bug report being worked on, link to created PR if any
+- "Stop Agent" button for running agents
+
+**Pool Capacity Gauge (always visible in page header):**
+- Compact horizontal bar: `████████████░░░░░░░░░░░░░░░░░░ 12/30 active`
+- Segments colored by agent type
+- Queued count as a badge: `+8 queued`
+
+### 7.7 PR Pipeline
+
+**Primary view: Kanban Board**
+
+Columns representing the bug-to-merge lifecycle:
+- **Reported** — bugs found, not yet being worked on
+- **Verifying** — verify agents running
+- **Fixing** — fix agents running
+- **PR Open** — PR created on GitHub, awaiting human review
+- **Merged** — accepted and merged (last 7 days, then archived)
+- **Closed** — rejected or closed (last 7 days, then archived)
+
+Cards are not draggable (David controls the pipeline) but move between columns automatically with smooth animation as status changes.
+
+**Card contents:**
+- Bug title (truncated to one line)
+- Severity badge (color-coded chip)
+- Source badge: "log scan" or "audit"
+- Affected area (L1 > L2 label)
+- Age (e.g., "2h ago")
+- Mini diff stat: `+12 −3` in green/red
+- For PR Open cards: clickable GitHub link icon
+
+**Detail panel (opens on card click):**
+- Full bug report: pattern, evidence, suspected root cause
+- Agent trace: which agents worked on this, their output summaries
+- Diff viewer: syntax-highlighted, collapsible file sections
+- PR details: GitHub link, review status, comments summary
+- For closed PRs: rejection reason if available
+
+**Bottom strip — Learning Metrics (always visible at bottom of this page):**
+- Left: acceptance rate as a large number with trend arrow (↑/↓ vs last week)
+- Center: small area chart — acceptance rate over the last 30 days
+- Right: top 3 accepted patterns and top 3 rejected patterns as compact labeled chips
+
+### 7.8 Real-Time Infrastructure
+
+All pages receive live updates via WebSocket (Socket.IO). No polling.
+
+**Event types pushed to clients:**
+- Agent lifecycle: spawned, output line, status change, completed, failed
+- Scan lifecycle: started, progress update, completed
+- Bug reports: created, status changed
+- PRs: created, merged, closed
+- Topology: mapping started, progress, completed
+- System: scheduler state change, pool capacity change
+
+**Cross-view context linking:**
+- Clicking a bug reference anywhere navigates to that bug's card in the PR Pipeline
+- Clicking an agent reference navigates to that agent's node in the Agent Monitor
+- Clicking a topology node reference navigates to the Codebase Map, zoomed to that node
+- All navigation is deep-linkable via URL parameters
+
+**Reconnection:**
+- On WebSocket disconnect, show a subtle top banner: "Reconnecting..." with automatic exponential retry
+- On reconnect, fetch a full state snapshot to sync any missed events
 
 ---
 
@@ -696,34 +839,63 @@ david/
 │   ├── index.html
 │   └── src/
 │       ├── main.tsx
-│       ├── App.tsx                # Router + layout
+│       ├── App.tsx                # Router + global shell
+│       │
 │       ├── components/
-│       │   ├── Layout.tsx         # Sidebar + main content shell
-│       │   ├── Sidebar.tsx
-│       │   ├── ActivityFeed.tsx   # Real-time event stream
-│       │   ├── AgentCard.tsx      # Single agent status card
-│       │   ├── AgentOutput.tsx    # Terminal-style agent output viewer
-│       │   ├── TopologyGraph.tsx  # Interactive codebase hierarchy
-│       │   ├── ScanConfig.tsx     # Log scan configuration form
-│       │   ├── PRTable.tsx        # PR list with filters
-│       │   ├── LearningCharts.tsx # Accept/reject trends
-│       │   └── StatusBar.tsx      # Pool status bar
+│       │   ├── shell/
+│       │   │   ├── GlobalShell.tsx    # Top bar + sidebar + bottom ticker + content slot
+│       │   │   ├── TopBar.tsx         # Live counters, health indicator, theme toggle
+│       │   │   ├── Sidebar.tsx        # Icon nav, expand-on-hover labels
+│       │   │   ├── EventTicker.tsx    # Bottom single-line event bar
+│       │   │   ├── CommandPalette.tsx # Cmd+K search overlay
+│       │   │   └── ToastManager.tsx   # Notification toasts
+│       │   │
+│       │   ├── command-center/
+│       │   │   ├── AgentPoolGauge.tsx # Vertical bar/ring pool visualization
+│       │   │   ├── EventTimeline.tsx  # Live scrolling causal event stream
+│       │   │   └── HealthVitals.tsx   # Stacked mini area charts + number grid
+│       │   │
+│       │   ├── log-scanner/
+│       │   │   ├── HeatmapTimeline.tsx# Horizontal error-density heatmap
+│       │   │   ├── ScanHistory.tsx    # Expandable scan result list
+│       │   │   └── ScanConfigDrawer.tsx# Slide-out config panel
+│       │   │
+│       │   ├── topology/
+│       │   │   ├── Treemap.tsx        # Zoomable D3 treemap with animated transitions
+│       │   │   ├── ActivityOverlay.tsx # Agent activity badges on treemap nodes
+│       │   │   └── NodeDetailDrawer.tsx# Slide-out node info, bugs, PRs, audit history
+│       │   │
+│       │   ├── agents/
+│       │   │   ├── AgentTree.tsx      # Hierarchical process tree visualization
+│       │   │   ├── AgentGantt.tsx     # Gantt-style timeline bar chart
+│       │   │   ├── AgentDetail.tsx    # Split pane: live output + context
+│       │   │   ├── TerminalViewer.tsx # Monospace auto-scrolling output stream
+│       │   │   └── PoolBar.tsx        # Compact horizontal capacity gauge
+│       │   │
+│       │   └── pr-pipeline/
+│       │       ├── KanbanBoard.tsx    # Column layout with animated card movement
+│       │       ├── PipelineCard.tsx   # Bug/PR card with severity, diff stat, badges
+│       │       ├── PipelineDetail.tsx # Full bug report, diff viewer, agent trace
+│       │       └── LearningStrip.tsx  # Acceptance rate, trend chart, pattern chips
 │       │
 │       ├── pages/
-│       │   ├── Overview.tsx
+│       │   ├── CommandCenter.tsx
 │       │   ├── LogScanner.tsx
 │       │   ├── CodebaseMap.tsx
 │       │   ├── AgentMonitor.tsx
-│       │   └── PRTracker.tsx
+│       │   └── PRPipeline.tsx
 │       │
 │       ├── hooks/
-│       │   ├── useSocket.ts       # Socket.IO connection + event handlers
-│       │   ├── useAgents.ts       # Agent state management
-│       │   └── useTopology.ts     # Topology graph data
+│       │   ├── useSocket.ts       # Socket.IO connection, reconnection, event handlers
+│       │   ├── useAgents.ts       # Agent tree state management
+│       │   ├── useTopology.ts     # Treemap data + zoom state
+│       │   ├── useScanConfig.ts   # Scan config state + schedule
+│       │   └── useTheme.ts        # Light/dark mode toggle + system preference
 │       │
 │       └── lib/
 │           ├── api.ts             # REST API client
-│           └── types.ts           # Shared TypeScript types
+│           ├── types.ts           # Shared TypeScript types
+│           └── theme.ts           # CSS custom properties for light/dark themes
 │
 ├── shared/                        # Shared types between server and dashboard
 │   ├── package.json
@@ -764,6 +936,8 @@ Recent learning from past PRs:
 
 Gold standard:
 You are allowed to make 0 or 1 PRs in this review. If through your thorough reviews you find and understand a bug or set of bugs that doesn't have a PR out for them yet, carefully make the fixes, verify your work by having a subagent audit your work, then if the work still seems relevant and worth committing touch it up and make a PR for it.
+
+If you do open a PR, babysit it: loop on `gh run watch` to keep CI green (fixing any failures), then read all PR comments and address any feedback. Repeat until CI is fully green and no comments remain unaddressed. Only then may you move on.
 ```
 
 ### 10.2 Audit Agent (per L3 group)
@@ -800,10 +974,11 @@ Your workflow:
    - If it is a real bug, explain that and how to fix it
 
 3. FIX: For each verified bug, launch a sub-agent to fix it:
-   - Write the minimal fix
+   - Write the fix (small change or broader refactor — agent's judgment)
    - Ensure existing tests still pass
    - Write new tests for the fix if appropriate
-   - Create one commit per fix
+   - Create one commit per fix, push, and open a PR targeting staging
+   - Babysit the PR: loop on `gh run watch` to keep CI green (fixing failures) and `gh api` to read and address all PR review comments. Only stop once CI is fully green and no comments remain unaddressed.
 
 CRITICAL: Prefer NO CHANGE over a speculative fix. Never mask issues. Observability improvements are a valid output.
 
@@ -821,54 +996,64 @@ Recent learning from past PRs in this area:
 1. Project scaffolding (monorepo, server, dashboard, shared types)
 2. MongoDB connection + all Mongoose models
 3. Express server with REST API stubs
-4. React dashboard shell with sidebar navigation + routing
-5. Socket.IO setup (server + client)
-6. Config system (env vars, target repo path, MongoDB URI)
+4. Design system: theme provider (light/dark), CSS custom properties, base typography
+5. Global shell: top bar with live counters, icon sidebar, bottom event ticker, routing
+6. Socket.IO setup (server + client) + reconnection logic
+7. Config system (env vars, target repo path, MongoDB URI)
+8. Command palette (Cmd+K) + toast notification system
 
 ### Phase 2: Codebase Mapper
-7. Filesystem walker
-8. OpenRouter LLM client
-9. L1/L2/L3 discovery pipeline
-10. Topology storage in MongoDB
-11. Interactive topology graph component in dashboard
-12. "Re-map" and "Audit Selected" buttons
+9. Filesystem walker
+10. OpenRouter LLM client
+11. L1/L2/L3 discovery pipeline
+12. Topology storage in MongoDB
+13. Zoomable treemap component (D3) with animated zoom transitions
+14. Activity overlay + node detail drawer
+15. "Re-map", "Audit Selected", and "Audit All" actions
 
 ### Phase 3: Agent Infrastructure
-13. CLI launcher (Claude Code subprocess + NDJSON)
-14. ManagedAgent lifecycle (health, timeout, restart)
-15. Agent Pool (30-cap, queue, drain)
-16. Worktree manager (create, cleanup, orphan detection)
-17. Agent monitor page in dashboard (cards, output viewer, status)
-18. WebSocket broadcasting of agent events
+16. CLI launcher (Claude Code subprocess + NDJSON)
+17. ManagedAgent lifecycle (health, timeout, restart)
+18. Agent Pool (30-cap, queue, drain)
+19. Worktree manager (create, cleanup, orphan detection)
+20. Agent monitor: process tree view + Gantt timeline view
+21. Agent detail panel: terminal viewer (ANSI support, auto-scroll) + context pane
+22. Pool capacity gauge
+23. WebSocket broadcasting of agent events
 
 ### Phase 4: Log Scanner
-19. CloudWatch prefetch (AWS SDK for JS, not Python — keep it all TypeScript)
-20. Log analysis agent orchestration
-21. Scan scheduling (node-cron, configurable)
-22. Log scanner page in dashboard (config, trigger, results)
-23. SRE state management
+24. CloudWatch prefetch (AWS SDK for JS, not Python — keep it all TypeScript)
+25. Log analysis agent orchestration
+26. Scan scheduling (node-cron, configurable)
+27. Log scanner page: heatmap timeline + expandable scan history + config drawer
+28. Live scan progress indicator
+29. SRE state management
 
 ### Phase 5: Codebase Audit
-24. Audit engine (dispatch L3 agents from topology)
-25. Audit/verify/fix sub-agent orchestration
-26. Integration with agent pool
-27. Selective audit from topology graph
+30. Audit engine (dispatch L3 agents from topology)
+31. Audit/verify/fix sub-agent orchestration
+32. Integration with agent pool
+33. Selective audit from topology treemap
 
 ### Phase 6: PR Pipeline
-28. PR creation via Octokit
-29. PR tracking (GitHub polling)
-30. PR tracker page in dashboard
-31. Learning engine (accept/reject tracking)
-32. Learning context injection into agent prompts
-33. Learning metrics dashboard
+34. PR creation via Octokit
+35. PR tracking (GitHub polling)
+36. Kanban board: columns, animated card transitions, card design
+37. Pipeline detail panel: bug report, diff viewer, agent trace
+38. Learning engine (accept/reject tracking)
+39. Learning context injection into agent prompts
+40. Learning metrics strip (acceptance trend, pattern chips)
 
-### Phase 7: Overview Dashboard
-34. Activity feed (aggregated WebSocket events)
-35. Status counters and sparklines
-36. Overview page assembly
+### Phase 7: Command Center
+41. Agent pool gauge visualization
+42. Live causal event timeline
+43. Health vitals (stacked area charts + number grid)
+44. Cross-view context linking (click any reference to navigate)
 
 ### Phase 8: Polish
-37. Error handling and edge cases
-38. Graceful shutdown (clean up agents, worktrees)
-39. Server startup recovery (detect orphaned worktrees, resume tracking open PRs)
-40. Performance tuning (MongoDB indexes, WebSocket throttling)
+45. Error handling and edge cases
+46. Graceful shutdown (clean up agents, worktrees)
+47. Server startup recovery (detect orphaned worktrees, resume tracking open PRs)
+48. Performance tuning (MongoDB indexes, WebSocket throttling)
+49. Keyboard shortcut system + accessibility pass
+50. Animation polish: spring interpolation on counters, smooth page transitions
