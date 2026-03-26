@@ -1,0 +1,20 @@
+{
+  "name": "david",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "server",
+    "dashboard",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:dashboard\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:dashboard": "cd dashboard && npm run dev",
+    "build": "npm run build --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  }
+}
