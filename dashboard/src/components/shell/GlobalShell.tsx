@@ -89,30 +89,32 @@ export function GlobalShell() {
   useKeyboardShortcuts();
 
   return (
-    <div className="h-screen grid grid-rows-[auto_1fr_auto] grid-cols-[auto_1fr] bg-[var(--bg-primary)] overflow-hidden">
+    <div className="h-screen grid grid-rows-[auto_auto_1fr_auto] grid-cols-[auto_1fr] bg-[var(--bg-primary)] overflow-hidden">
       {/* TopBar spans full width */}
-      <div className="col-span-2">
+      <div className="col-span-2 row-start-1">
         <TopBar />
       </div>
 
       {/* Reconnection banner — spans full width, between TopBar and content */}
       {(isDisconnected || reconnecting) && (
-        <div className="col-span-2 flex items-center justify-center gap-2 bg-amber-500/10 border-b border-amber-500/30 px-4 py-1.5 text-xs text-amber-400">
+        <div className="col-span-2 row-start-2 flex items-center justify-center gap-2 bg-amber-500/10 border-b border-amber-500/30 px-4 py-1.5 text-xs text-amber-400">
           <Loader2 className="h-3 w-3 animate-spin" />
           Reconnecting{timeSinceDisconnect ? ` (${Math.floor(timeSinceDisconnect / 1000)}s)` : '...'}
         </div>
       )}
 
       {/* Sidebar in left column */}
-      <Sidebar />
+      <div className="row-start-3">
+        <Sidebar />
+      </div>
 
       {/* Main content fills remaining space */}
-      <main className="overflow-y-auto p-6">
+      <main className="row-start-3 min-h-0 overflow-y-auto p-6">
         <Outlet />
       </main>
 
       {/* EventTicker spans full width */}
-      <div className="col-span-2">
+      <div className="col-span-2 row-start-4">
         <EventTicker />
       </div>
 

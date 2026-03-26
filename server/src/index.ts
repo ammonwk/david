@@ -9,6 +9,11 @@ import { scheduler } from './engine/scheduler.js';
 import { agentPool } from './agents/agent-pool.js';
 import { prTracker } from './pr/pr-tracker.js';
 import { PullRequestModel } from './db/models.js';
+import { ensureControlRepo } from './repo/repo-manager.js';
+import {
+  getCLIBackend,
+  initializeRuntimeSettings,
+} from './runtime/runtime-settings.js';
 
 // Import API routes
 import scansRouter from './api/scans.js';
@@ -59,41 +64,60 @@ async function main() {
   // 0. Kill orphaned agent processes from a previous crash
   killOrphanedAgentProcesses();
 
-  // 1. Connect to MongoDB (fail fast if unreachable)
-  await connectDB();
-  console.log('[startup] MongoDB connected');
+  let startupReady = false;
+  let startupPhase = 'initializing';
+  let startupError: string | null = null;
 
-  // 2. Verify target repo exists (warn only — topology mapping will fail gracefully)
-  try {
-    const fs = await import('fs/promises');
-    await fs.access(config.targetRepoPath);
-  } catch {
-    console.warn(`[startup] Target repo not found at ${config.targetRepoPath} — topology mapping will be unavailable`);
-  }
-
-  // 3. Create Express app
+  // 1. Create Express app and start listening immediately so Vite can proxy
+  // requests while the backend finishes its slower startup work.
   const app = express();
   app.use(cors());
   app.use(express.json({ limit: '10mb' }));
 
-  // 4. Mount API routes
+  // Health check and startup status
+  app.get('/api/health', (_req, res) => {
+    const status = startupError ? 'failed' : startupReady ? 'ok' : 'starting';
+    const statusCode = startupError ? 500 : startupReady ? 200 : 503;
+    res.status(statusCode).json({
+      status,
+      phase: startupPhase,
+      error: startupError,
+      uptime: process.uptime(),
+    });
+  });
+
+  // Return a clear 503 during startup instead of refusing the TCP connection.
+  app.use('/api', (_req, res, next) => {
+    if (startupReady) {
+      next();
+      return;
+    }
+
+    res.status(503).json({
+      status: 'starting',
+      phase: startupPhase,
+    });
+  });
+
+  // 2. Mount API routes
   app.use('/api/scans', scansRouter);
   app.use('/api/state', stateRouter);
   app.use('/api/agents', agentsRouter);
   app.use('/api/topology', topologyRouter);
   app.use('/api/prs', prsRouter);
 
-  // Health check
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', uptime: process.uptime() });
-  });
-
-  // 5. Create HTTP server and attach Socket.IO
+  // 3. Create HTTP server and attach Socket.IO
   const server = createServer(app);
   socketManager.init(server);
   console.log('[startup] Socket.IO initialized');
 
-  // 6. Wire agent pool events to Socket.IO
+  server.listen(config.port, () => {
+    console.log(`David server running on port ${config.port}`);
+    console.log(`Dashboard: http://localhost:5173`);
+    console.log(`API: http://localhost:${config.port}/api`);
+  });
+
+  // 4. Wire agent pool events to Socket.IO
   agentPool.on('agent:started', (agent) => {
     socketManager.emitAgentStarted({
       agentId: agent.id,
@@ -133,97 +157,108 @@ async function main() {
     socketManager.emitPoolStatus(status);
   });
 
-  // 7. Set up scheduled jobs
-  // Log scan schedule
-  scheduler.registerScanJob(
-    {
-      enabled: true,
-      timeSpan: config.defaultScanTimeSpan,
-      severity: config.defaultSeverityFilter,
-      cronExpression: config.defaultScanCron,
-    },
-    async () => {
-      try {
-        const { logScanner } = await import('./engine/log-scanner.js');
-        await logScanner.runScan({
-          timeSpan: config.defaultScanTimeSpan,
-          severity: config.defaultSeverityFilter,
-        });
-      } catch (err) {
-        console.error('Scheduled scan failed:', err);
-      }
-    }
-  );
-
-  // Codebase audit schedule
-  scheduler.registerAuditJob(
-    {
-      enabled: true,
-      cronExpression: config.defaultAuditCron,
-    },
-    async () => {
-      try {
-        const { auditEngine } = await import('./engine/audit-engine.js');
-        await auditEngine.runFullAudit();
-      } catch (err) {
-        console.error('Scheduled audit failed:', err);
-      }
-    }
-  );
-  console.log('[startup] Scheduler initialized');
-
-  // 8. Start PR tracking (poll GitHub every 5 minutes)
-  prTracker.startPolling(
-    // getOpenPRs
-    async () => {
-      return PullRequestModel.find({ status: 'open' }).lean() as any;
-    },
-    // updatePR
-    async (id, updates) => {
-      await PullRequestModel.findByIdAndUpdate(id, updates);
-    },
-    // onStatusChange
-    (pr, newStatus) => {
-      if (newStatus === 'merged') {
-        socketManager.emitPRMerged({
-          prId: pr._id?.toString() || '',
-          prNumber: pr.prNumber,
-          prUrl: pr.prUrl,
-          title: pr.title,
-          status: 'merged',
-        });
-      } else if (newStatus === 'closed') {
-        socketManager.emitPRClosed({
-          prId: pr._id?.toString() || '',
-          prNumber: pr.prNumber,
-          prUrl: pr.prUrl,
-          title: pr.title,
-          status: 'closed',
-        });
-      }
-    }
-  );
-  console.log('[startup] PR tracker polling started');
-
-  // 9. Startup recovery
   try {
-    // Clean up orphaned worktrees
-    const { cleanupOrphanedWorktrees } = await import('./agents/worktree-manager.js');
-    const activeAgentBranches = new Set<string>(); // No active agents on startup
-    const cleaned = await cleanupOrphanedWorktrees(activeAgentBranches);
-    if (cleaned > 0) console.log(`[startup] Cleaned up ${cleaned} orphaned worktrees`);
+    startupPhase = 'connecting to MongoDB';
+    await connectDB();
+    console.log('[startup] MongoDB connected');
+
+    startupPhase = 'loading runtime settings';
+    await initializeRuntimeSettings();
+    console.log(`[startup] Agent backend: ${getCLIBackend()}`);
+
+    startupPhase = 'verifying repository';
+    const repo = await ensureControlRepo(true);
+    console.log(
+      `[startup] Repository ready (${repo.mode}): ${repo.sourceDescription} -> ${repo.controlRepoPath}`,
+    );
+
+    startupPhase = 'initializing scheduler';
+    scheduler.registerScanJob(
+      {
+        enabled: true,
+        timeSpan: config.defaultScanTimeSpan,
+        severity: config.defaultSeverityFilter,
+        cronExpression: config.defaultScanCron,
+      },
+      async () => {
+        try {
+          const { logScanner } = await import('./engine/log-scanner.js');
+          await logScanner.runScan({
+            timeSpan: config.defaultScanTimeSpan,
+            severity: config.defaultSeverityFilter,
+          });
+        } catch (err) {
+          console.error('Scheduled scan failed:', err);
+        }
+      }
+    );
+
+    scheduler.registerAuditJob(
+      {
+        enabled: true,
+        cronExpression: config.defaultAuditCron,
+      },
+      async () => {
+        try {
+          const { auditEngine } = await import('./engine/audit-engine.js');
+          await auditEngine.runFullAudit();
+        } catch (err) {
+          console.error('Scheduled audit failed:', err);
+        }
+      }
+    );
+    console.log('[startup] Scheduler initialized');
+
+    startupPhase = 'starting PR tracker';
+    prTracker.startPolling(
+      async () => {
+        return PullRequestModel.find({ status: 'open' }).lean() as any;
+      },
+      async (id, updates) => {
+        await PullRequestModel.findByIdAndUpdate(id, updates);
+      },
+      (pr, newStatus) => {
+        if (newStatus === 'merged') {
+          socketManager.emitPRMerged({
+            prId: pr._id?.toString() || '',
+            prNumber: pr.prNumber,
+            prUrl: pr.prUrl,
+            title: pr.title,
+            status: 'merged',
+          });
+        } else if (newStatus === 'closed') {
+          socketManager.emitPRClosed({
+            prId: pr._id?.toString() || '',
+            prNumber: pr.prNumber,
+            prUrl: pr.prUrl,
+            title: pr.title,
+            status: 'closed',
+          });
+        }
+      }
+    );
+    console.log('[startup] PR tracker polling started');
+
+    startupPhase = 'cleaning orphaned worktrees';
+    try {
+      const { cleanupOrphanedWorktrees } = await import('./agents/worktree-manager.js');
+      const activeAgentBranches = new Set<string>(); // No active agents on startup
+      const cleaned = await cleanupOrphanedWorktrees(activeAgentBranches);
+      if (cleaned > 0) console.log(`[startup] Cleaned up ${cleaned} orphaned worktrees`);
+    } catch (err) {
+      console.warn('[startup] Worktree cleanup failed (non-fatal):', err);
+    }
+
+    startupReady = true;
+    startupPhase = 'ready';
+    console.log('[startup] Initialization complete');
   } catch (err) {
-    console.warn('[startup] Worktree cleanup failed (non-fatal):', err);
+    startupPhase = 'failed';
+    startupError = err instanceof Error ? err.message : String(err);
+    throw err;
   }
 
-  // 10. Start HTTP server
-  server.listen(config.port, () => {
-    console.log(`David server running on port ${config.port}`);
-    console.log(`Dashboard: http://localhost:5173`);
-    console.log(`API: http://localhost:${config.port}/api`);
-  });
-
-  // 11. Graceful shutdown
+  // 5. Graceful shutdown
   let shutdownInProgress = false;
 
   const shutdown = async (signal: string) => {

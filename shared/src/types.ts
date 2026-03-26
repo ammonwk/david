@@ -46,6 +46,9 @@ export type VerificationMethod =
 /** The role an agent fulfils in the pipeline. */
 export type AgentType = 'log-analysis' | 'audit' | 'verify' | 'fix';
 
+/** Which CLI backend powers agent execution. */
+export type AgentBackend = 'claude' | 'codex';
+
 /** Lifecycle status of an agent execution. */
 export type AgentStatus =
   | 'queued'
@@ -435,6 +438,17 @@ export interface UpdateScheduleRequest {
   audit?: Partial<AuditScheduleConfig>;
 }
 
+/** Persisted runtime settings for operator-controlled behavior. */
+export interface RuntimeSettings {
+  cliBackend: AgentBackend;
+  updatedAt: Date;
+}
+
+/** Request body to update runtime settings. */
+export interface UpdateRuntimeSettingsRequest {
+  cliBackend: AgentBackend;
+}
+
 /** Response describing current schedule configuration and next run times. */
 export interface ScheduleStatusResponse {
   scan: ScanScheduleConfig & {
@@ -516,6 +530,7 @@ export interface OverviewStats {
   lastScanAt?: Date;
   lastAuditAt?: Date;
   systemStatus: 'running' | 'paused' | 'error';
+  cliBackend: AgentBackend;
 }
 
 // ============================================

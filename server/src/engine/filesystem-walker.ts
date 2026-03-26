@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { config } from '../config.js';
+import { getControlRepoPath } from '../repo/repo-manager.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -226,7 +226,7 @@ async function walkDirectory(
 export async function walkRepo(
   repoPath?: string,
 ): Promise<WalkResult> {
-  const root = repoPath ?? config.targetRepoPath;
+  const root = repoPath ?? await getControlRepoPath(false);
   const resolvedRoot = path.resolve(root);
 
   const files: FileInfo[] = [];

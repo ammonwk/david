@@ -1,8 +1,9 @@
-import { execSync, exec } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../config.js';
+import { ensureControlRepo } from '../repo/repo-manager.js';
 
 const execAsync = promisify(exec);
 
@@ -21,6 +22,13 @@ export function getWorktreePath(bugId: string): string {
 }
 
 /**
+ * Get the detached snapshot worktree path for a task.
+ */
+export function getSnapshotWorktreePath(taskId: string): string {
+  return path.join(config.worktreesDir, `snapshot-${taskId}`);
+}
+
+/**
  * Get the branch name for a bug.
  */
 export function getBranchName(bugId: string): string {
@@ -28,12 +36,11 @@ export function getBranchName(bugId: string): string {
 }
 
 /**
- * Run a git command against the target repo.
- * All commands use config.targetRepoPath as the working directory
- * unless an explicit cwd is provided.
+ * Run a git command against the managed control repo unless an explicit
+ * worktree cwd is provided.
  */
 async function git(args: string, cwd?: string): Promise<string> {
-  const workingDir = cwd ?? config.targetRepoPath;
+  const workingDir = cwd ?? (await ensureControlRepo(false)).controlRepoPath;
   const cmd = `git ${args}`;
   console.log(`[worktree-manager] Running: ${cmd} (cwd: ${workingDir})`);
 
@@ -59,6 +66,7 @@ async function git(args: string, cwd?: string): Promise<string> {
  * Base: origin/staging
  */
 export async function createWorktree(bugId: string): Promise<WorktreeInfo> {
+  const { controlRepoPath } = await ensureControlRepo(true);
   const worktreePath = getWorktreePath(bugId);
   const branch = getBranchName(bugId);
 
@@ -72,18 +80,18 @@ export async function createWorktree(bugId: string): Promise<WorktreeInfo> {
   }
 
   // 3. Fetch latest staging
-  await git(`fetch origin ${config.baseBranch}`);
+  await git(`fetch origin ${config.baseBranch}`, controlRepoPath);
 
   // 4. Delete the local branch if it already exists (leftover from a previous run)
   try {
-    await git(`branch -D ${branch}`);
+    await git(`branch -D ${branch}`, controlRepoPath);
     console.log(`[worktree-manager] Deleted stale local branch ${branch}`);
   } catch {
     // Branch doesn't exist — that's fine
   }
 
   // 5. Create worktree with a new branch off origin/staging
-  await git(`worktree add -b ${branch} ${worktreePath} origin/${config.baseBranch}`);
+  await git(`worktree add -b ${branch} ${worktreePath} origin/${config.baseBranch}`, controlRepoPath);
 
   // 6. Read HEAD commit from the new worktree
   const commitHash = await git('rev-parse HEAD', worktreePath);
@@ -97,28 +105,71 @@ export async function createWorktree(bugId: string): Promise<WorktreeInfo> {
 }
 
 /**
+ * Create a detached snapshot worktree from the latest remote base branch.
+ * Used for read-only tasks like mapping and analysis so they don't run in
+ * the control repo itself.
+ */
+export async function createSnapshotWorktree(taskId: string): Promise<WorktreeInfo> {
+  const { controlRepoPath } = await ensureControlRepo(true);
+  const worktreePath = getSnapshotWorktreePath(taskId);
+
+  await fs.mkdir(config.worktreesDir, { recursive: true });
+
+  try {
+    await fs.access(worktreePath);
+    throw new Error(`Snapshot worktree already exists at ${worktreePath}`);
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+
+  await git(`worktree add --detach ${worktreePath} origin/${config.baseBranch}`, controlRepoPath);
+
+  const commitHash = await git('rev-parse HEAD', worktreePath);
+
+  return {
+    path: worktreePath,
+    branch: '(detached)',
+    commitHash,
+    createdAt: new Date(),
+  };
+}
+
+/**
  * Remove a worktree and its branch.
  */
 export async function removeWorktree(bugId: string): Promise<void> {
   const worktreePath = getWorktreePath(bugId);
   const branch = getBranchName(bugId);
+  await removeWorktreeByPath(worktreePath, branch);
+}
+
+/**
+ * Remove a worktree by absolute path, optionally deleting its branch too.
+ */
+export async function removeWorktreeByPath(
+  worktreePath: string,
+  branch?: string,
+): Promise<void> {
+  const { controlRepoPath } = await ensureControlRepo(false);
 
   // 1. Remove the worktree (--force handles dirty working trees)
   try {
-    await git(`worktree remove ${worktreePath} --force`);
+    await git(`worktree remove ${worktreePath} --force`, controlRepoPath);
     console.log(`[worktree-manager] Removed worktree at ${worktreePath}`);
   } catch (error: any) {
     // If the directory was already deleted manually, prune instead
     console.warn(`[worktree-manager] worktree remove failed, pruning: ${error.message}`);
-    await git('worktree prune');
+    await git('worktree prune', controlRepoPath);
   }
 
   // 2. Delete the local branch (ignore errors if already deleted)
-  try {
-    await git(`branch -D ${branch}`);
-    console.log(`[worktree-manager] Deleted branch ${branch}`);
-  } catch {
-    console.log(`[worktree-manager] Branch ${branch} already deleted or does not exist`);
+  if (branch && branch !== '(detached)') {
+    try {
+      await git(`branch -D ${branch}`, controlRepoPath);
+      console.log(`[worktree-manager] Deleted branch ${branch}`);
+    } catch {
+      console.log(`[worktree-manager] Branch ${branch} already deleted or does not exist`);
+    }
   }
 }
 
@@ -188,10 +239,10 @@ export async function cleanupOrphanedWorktrees(
   console.log('[worktree-manager] Starting orphaned worktree cleanup...');
 
   try {
-    await fs.access(config.targetRepoPath);
+    await ensureControlRepo(false);
   } catch {
     console.warn(
-      `[worktree-manager] Skipping cleanup because target repo does not exist: ${config.targetRepoPath}`,
+      '[worktree-manager] Skipping cleanup because the control repo is unavailable',
     );
     return 0;
   }
@@ -210,7 +261,11 @@ export async function cleanupOrphanedWorktrees(
       const bugId = dirName.replace(/^sre-/, '');
 
       try {
-        await removeWorktree(bugId);
+        if (dirName.startsWith('sre-')) {
+          await removeWorktree(bugId);
+        } else {
+          await removeWorktreeByPath(wt.path, wt.branch);
+        }
         cleaned++;
       } catch (error: any) {
         console.error(
@@ -222,7 +277,8 @@ export async function cleanupOrphanedWorktrees(
 
   // Final prune to catch any dangling references
   try {
-    await git('worktree prune');
+    const { controlRepoPath } = await ensureControlRepo(false);
+    await git('worktree prune', controlRepoPath);
   } catch {
     // Non-critical
   }

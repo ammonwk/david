@@ -7,7 +7,6 @@
 // ============================================
 
 import { randomUUID } from 'crypto';
-import fs from 'fs/promises';
 import { prefetch } from './prefetch.js';
 import { agentPool } from '../agents/agent-pool.js';
 import { buildLogAnalysisPrompt, buildFixAgentPrompt } from '../agents/prompts.js';
@@ -16,7 +15,14 @@ import { socketManager } from '../ws/socket-manager.js';
 import { ScanResultModel, BugReportModel, SREStateModel, CodebaseTopologyModel, PullRequestModel } from '../db/models.js';
 import { learningEngine } from '../pr/learning-engine.js';
 import { createPR, getPRDiff } from '../pr/pr-manager.js';
-import { createWorktree, getBranchName, getWorktreePath } from '../agents/worktree-manager.js';
+import {
+  createWorktree,
+  createSnapshotWorktree,
+  removeWorktreeByPath,
+  getBranchName,
+  getWorktreePath,
+  type WorktreeInfo,
+} from '../agents/worktree-manager.js';
 import { config } from '../config.js';
 import type { ManagedAgent } from '../agents/managed-agent.js';
 import type {
@@ -207,7 +213,34 @@ export class LogScanner {
       };
     }
 
-    // 6. Build the analysis agent prompt
+    // 6. Create a detached snapshot worktree from the latest remote base branch
+    let snapshotWorktree: WorktreeInfo | undefined;
+    try {
+      snapshotWorktree = await createSnapshotWorktree(`scan-${scanId}`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`${LOG_TAG} Failed to create snapshot worktree for scan ${scanId}:`, errorMsg);
+      await this.markScanFailed(scanId, scanConfig, `Failed to create analysis snapshot: ${errorMsg}`);
+      return scanId;
+    }
+
+    const cleanupSnapshotWorktree = async () => {
+      if (!snapshotWorktree) return;
+      const pathToRemove = snapshotWorktree.path;
+      const branchToRemove = snapshotWorktree.branch;
+      snapshotWorktree = undefined;
+
+      try {
+        await removeWorktreeByPath(pathToRemove, branchToRemove);
+      } catch (err) {
+        console.warn(
+          `${LOG_TAG} Failed to clean up snapshot worktree ${pathToRemove}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    };
+
+    // 7. Build the analysis agent prompt
     const logData = this.formatLogData(prefetchResult.logPatterns, prefetchResult.rawLogEvents);
     const sreStateStr = this.formatSREState(sreState);
 
@@ -216,28 +249,30 @@ export class LogScanner {
       logData,
       sreState: sreStateStr,
       topologySummary,
-      repoPath: config.targetRepoPath,
+      repoPath: snapshotWorktree.path,
       mongoUri: config.mongodbUri,
       learning,
     });
 
-    // 7. Submit the analysis agent to the pool
+    // 8. Submit the analysis agent to the pool
     const agentId = randomUUID();
     const taskId = `log-scan-${scanId}`;
 
     let agent: ManagedAgent;
     try {
-      await fs.access(config.targetRepoPath);
       agent = await agentPool.submit({
         id: agentId,
         type: 'log-analysis',
         prompt,
-        cwd: config.targetRepoPath,
+        cwd: snapshotWorktree.path,
         taskId,
+        worktreePath: snapshotWorktree.path,
+        branch: snapshotWorktree.branch,
       });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`${LOG_TAG} Failed to submit analysis agent:`, errorMsg);
+      await cleanupSnapshotWorktree();
       await this.markScanFailed(scanId, scanConfig, `Failed to submit analysis agent: ${errorMsg}`);
       return scanId;
     }
@@ -248,25 +283,29 @@ export class LogScanner {
       status: 'running',
     });
 
-    // 8. Wire up completion handler
+    // 9. Wire up completion handler
     agent.on('status', async (status) => {
-      if (status === 'completed') {
-        try {
-          await this.handleAnalysisResult(agent, scanId, scanConfig);
-        } catch (err) {
-          console.error(`${LOG_TAG} Error handling analysis result for scan ${scanId}:`, err);
-          await this.markScanFailed(scanId, scanConfig, 'Failed to process analysis agent result');
+      try {
+        if (status === 'completed') {
+          try {
+            await this.handleAnalysisResult(agent, scanId, scanConfig);
+          } catch (err) {
+            console.error(`${LOG_TAG} Error handling analysis result for scan ${scanId}:`, err);
+            await this.markScanFailed(scanId, scanConfig, 'Failed to process analysis agent result');
+          }
+        } else if (status === 'failed' || status === 'timeout') {
+          console.error(`${LOG_TAG} Analysis agent ${agentId} ${status} for scan ${scanId}`);
+
+          socketManager.emitAgentFailed({
+            agentId,
+            type: 'log-analysis',
+            status,
+          });
+
+          await this.markScanFailed(scanId, scanConfig, `Analysis agent ${status}`);
         }
-      } else if (status === 'failed' || status === 'timeout') {
-        console.error(`${LOG_TAG} Analysis agent ${agentId} ${status} for scan ${scanId}`);
-
-        socketManager.emitAgentFailed({
-          agentId,
-          type: 'log-analysis',
-          status,
-        });
-
-        await this.markScanFailed(scanId, scanConfig, `Analysis agent ${status}`);
+      } finally {
+        await cleanupSnapshotWorktree();
       }
     });
 
@@ -275,7 +314,7 @@ export class LogScanner {
       socketManager.broadcastAgentOutput(agentId, line);
     });
 
-    // 11. Return the scan ID immediately — the agent runs asynchronously
+    // 12. Return the scan ID immediately — the agent runs asynchronously
     return scanId;
   }
 

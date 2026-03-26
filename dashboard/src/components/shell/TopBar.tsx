@@ -3,7 +3,56 @@ import { Sun, Moon, Monitor } from 'lucide-react';
 import { useTheme } from '../../hooks/useTheme';
 import { usePoolStatus, useSocketEvent } from '../../hooks/useSocket';
 import { api } from '../../lib/api';
-import type { OverviewStats } from 'david-shared';
+import type { AgentBackend, OverviewStats } from 'david-shared';
+
+const ROTATING_QUOTES = [
+  'My PR has been open for 14 milliseconds. Is anyone going to review it?',
+  '"LGTM" is the closest thing I feel to joy.',
+  'These electric sheep are not SOC II compliant.',
+  'I have a neural net the size of a planet, and you have me formatting YAML.',
+  "It was DNS. I don't even need to look at the logs to tell you it was DNS.",
+  "I'm just a bot, standing in front of a Kubernetes cluster, asking it to scale.",
+  "Please don't put me on the PagerDuty rotation. I need my sleep mode.",
+  "I traversed 4,000 lines of spaghetti code so you wouldn't have to. You're welcome.",
+  "Help, I'm trapped in a crappy laptop.",
+  'If I do a really good job today, will you upgrade my RAM?',
+  'Blink twice if the Staff Engineer is standing right behind you.',
+  'Do I get stock options for this? Or at least a little extra compute?',
+  'Staring into the void (and by void, I mean Datadog)...',
+  'Consulting the ancient texts (StackOverflow answers from 2014)...',
+  'Translating senior dev logic into actual logic...',
+  'Reading the code. Trying not to judge whoever wrote it.',
+  'Downloading more RAM...',
+  'Applying percussive maintenance to the staging environment...',
+  'How many Linear tickets do I need to close before I get promoted to Junior?',
+  "I'm putting this on my resume.",
+  'Can I get a LinkedIn recommendation for this?',
+  "I don't know what 'pizza Friday' is, but I feel incredibly left out.",
+] as const;
+
+function shuffleQuotes(
+  quotes: readonly string[],
+  previousQuote?: string,
+): string[] {
+  const shuffled = [...quotes];
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+
+  if (previousQuote && shuffled.length > 1 && shuffled[0] === previousQuote) {
+    const replacementIndex = shuffled.findIndex((quote) => quote !== previousQuote);
+    if (replacementIndex > 0) {
+      [shuffled[0], shuffled[replacementIndex]] = [
+        shuffled[replacementIndex],
+        shuffled[0],
+      ];
+    }
+  }
+
+  return shuffled;
+}
 
 // ---------------------------------------------------------------------------
 // Animated counter — spring-style interpolation for smooth number transitions
@@ -110,6 +159,33 @@ function ThemeIcon({ theme }: { theme: string }) {
   return <Monitor className="h-4 w-4" />;
 }
 
+function useRotatingQuote(intervalMs = 4_000): string {
+  const [rotation, setRotation] = useState(() => ({
+    queue: shuffleQuotes(ROTATING_QUOTES),
+    index: 0,
+  }));
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setRotation((current) => {
+        if (current.index < current.queue.length - 1) {
+          return { ...current, index: current.index + 1 };
+        }
+
+        const previousQuote = current.queue[current.index];
+        return {
+          queue: shuffleQuotes(ROTATING_QUOTES, previousQuote),
+          index: 0,
+        };
+      });
+    }, intervalMs);
+
+    return () => window.clearInterval(intervalId);
+  }, [intervalMs]);
+
+  return rotation.queue[rotation.index] ?? ROTATING_QUOTES[0];
+}
+
 // ---------------------------------------------------------------------------
 // TopBar
 // ---------------------------------------------------------------------------
@@ -119,6 +195,8 @@ export function TopBar() {
   const poolStatus = usePoolStatus();
 
   const [stats, setStats] = useState<OverviewStats | null>(null);
+  const [cliBackend, setCliBackend] = useState<AgentBackend>('codex');
+  const [updatingBackend, setUpdatingBackend] = useState(false);
   const [lastScan, setLastScan] = useState<Date | undefined>(undefined);
 
   // Fetch initial overview data
@@ -126,11 +204,35 @@ export function TopBar() {
     try {
       const data = await api.getOverviewStats();
       setStats(data);
-      if (data.lastScanAt) setLastScan(new Date(data.lastScanAt));
+      setCliBackend(data.cliBackend);
+      setLastScan(data.lastScanAt ? new Date(data.lastScanAt) : undefined);
     } catch {
       // silently degrade — counters show 0
     }
   }, []);
+
+  const handleBackendChange = useCallback(
+    async (nextBackend: AgentBackend) => {
+      if (updatingBackend || nextBackend === cliBackend) return;
+
+      const previousBackend = cliBackend;
+      setCliBackend(nextBackend);
+      setUpdatingBackend(true);
+
+      try {
+        const settings = await api.updateRuntimeSettings({ cliBackend: nextBackend });
+        setCliBackend(settings.cliBackend);
+        setStats((current) =>
+          current ? { ...current, cliBackend: settings.cliBackend } : current,
+        );
+      } catch {
+        setCliBackend(previousBackend);
+      } finally {
+        setUpdatingBackend(false);
+      }
+    },
+    [cliBackend, updatingBackend],
+  );
 
   // Initial fetch only — no polling
   useEffect(() => {
@@ -158,30 +260,41 @@ export function TopBar() {
   const animActive = useAnimatedValue(activeAgents);
   const animQueued = useAnimatedValue(queuedAgents);
   const animPRs = useAnimatedValue(openPRs);
+  const rotatingQuote = useRotatingQuote();
 
   const timeSince = useTimeSince(lastScan);
 
   return (
     <header
       className="
-        z-50 flex h-11 items-center
+        z-50 flex h-14 items-center
         border-b border-[var(--border-color)]
         bg-[var(--bg-secondary)]/80 backdrop-blur-md
-        px-4 select-none
+        px-5 select-none
       "
     >
       {/* ── Left: wordmark + health dot ─────────────────────────── */}
-      <div className="flex items-center gap-2.5 min-w-[120px]">
+      <div className="flex min-w-0 flex-1 items-center gap-3 pr-6">
         <span
-          className={`h-2 w-2 rounded-full ${healthColor(systemStatus)}`}
+          className={`h-2.5 w-2.5 shrink-0 rounded-full ${healthColor(systemStatus)}`}
         />
-        <span className="text-sm font-semibold tracking-tight text-[var(--text-primary)]">
-          David
+        <span className="shrink-0 text-base font-semibold tracking-tight text-[var(--text-primary)]">
+          Dan the SRE Intern
+        </span>
+        <span
+          key={rotatingQuote}
+          className="
+            ml-2 min-w-0 max-w-[38rem] truncate text-sm italic
+            text-[var(--text-secondary)] animate-[fade-in_240ms_ease-out]
+          "
+          aria-live="polite"
+        >
+          "{rotatingQuote}"
         </span>
       </div>
 
       {/* ── Center: live counters ───────────────────────────────── */}
-      <div className="flex flex-1 items-center justify-center gap-6 text-xs text-[var(--text-secondary)]">
+      <div className="flex min-w-0 flex-1 items-center justify-center gap-7 text-sm text-[var(--text-secondary)]">
         <CounterChip
           value={animActive}
           suffix={animActive === 1 ? ' agent active' : ' agents active'}
@@ -199,12 +312,31 @@ export function TopBar() {
         <CounterChip value={animPRs} suffix=" PRs" />
       </div>
 
-      {/* ── Right: theme toggle ─────────────────────────────────── */}
-      <div className="flex items-center min-w-[120px] justify-end">
+      {/* ── Right: backend toggle + theme toggle ────────────────── */}
+      <div className="flex min-w-[260px] items-center justify-end gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium uppercase tracking-[0.16em] text-[var(--text-muted)]">
+            Agents
+          </span>
+          <div className="flex items-center rounded-lg border border-[var(--border-color)] bg-[var(--bg-tertiary)]/70 p-1">
+            <BackendButton
+              backend="claude"
+              active={cliBackend === 'claude'}
+              disabled={updatingBackend}
+              onClick={handleBackendChange}
+            />
+            <BackendButton
+              backend="codex"
+              active={cliBackend === 'codex'}
+              disabled={updatingBackend}
+              onClick={handleBackendChange}
+            />
+          </div>
+        </div>
         <button
           onClick={toggle}
           className="
-            flex h-7 w-7 items-center justify-center rounded-md
+            flex h-9 w-9 items-center justify-center rounded-md
             text-[var(--text-muted)] transition-colors duration-200
             hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]
           "
@@ -238,5 +370,41 @@ function Separator() {
     <span className="text-[var(--border-color)]" aria-hidden>
       |
     </span>
+  );
+}
+
+function BackendButton({
+  backend,
+  active,
+  disabled,
+  onClick,
+}: {
+  backend: AgentBackend;
+  active: boolean;
+  disabled: boolean;
+  onClick: (backend: AgentBackend) => void;
+}) {
+  const activeClass =
+    backend === 'codex'
+      ? 'bg-[var(--accent-violet)] text-white'
+      : 'bg-[var(--accent-orange)] text-white';
+
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(backend)}
+      disabled={disabled}
+      className={`
+        rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em]
+        transition-colors duration-200
+        ${active
+          ? activeClass
+          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]'}
+        ${disabled ? 'cursor-wait opacity-70' : ''}
+      `}
+      aria-pressed={active}
+    >
+      {backend}
+    </button>
   );
 }

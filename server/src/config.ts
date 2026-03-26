@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -9,7 +10,24 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 function parseCLIBackend(value: string | undefined): 'claude' | 'codex' {
-  return value === 'codex' ? 'codex' : 'claude';
+  return value === 'claude' ? 'claude' : 'codex';
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+
+  return value;
+}
+
+function resolvePathValue(value: string | undefined, fallback?: string): string {
+  const raw = value && value.trim().length > 0 ? value.trim() : fallback;
+  if (!raw) return '';
+  if (raw === '~') return os.homedir();
+  if (raw.startsWith('~/')) return path.join(os.homedir(), raw.slice(2));
+  return path.resolve(raw);
 }
 
 export const config = {
@@ -21,7 +39,7 @@ export const config = {
   mongodbUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/david',
 
   // Target repository
-  targetRepoPath: process.env.TARGET_REPO_PATH || path.resolve(process.env.HOME || '~', 'Documents/plaibook/ai-outbound-agent'),
+  targetRepoUrl: requireEnv('TARGET_REPO_URL'),
   baseBranch: process.env.BASE_BRANCH || 'staging',
 
   // AWS
@@ -48,6 +66,10 @@ export const config = {
 
   // Paths
   worktreesDir: path.resolve(__dirname, '../../worktrees'),
+  repoControlDir: resolvePathValue(
+    process.env.REPO_CONTROL_DIR,
+    path.resolve(__dirname, '../../.david/repo-control'),
+  ),
   projectRoot: path.resolve(__dirname, '../..'),
 
   // CLI backend

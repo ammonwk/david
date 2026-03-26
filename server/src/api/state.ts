@@ -11,7 +11,14 @@ import {
   AgentModel,
   PullRequestModel,
 } from '../db/models.js';
-import type { OverviewStats } from 'david-shared';
+import type {
+  OverviewStats,
+  UpdateRuntimeSettingsRequest,
+} from 'david-shared';
+import {
+  getRuntimeSettings,
+  updateRuntimeSettings,
+} from '../runtime/runtime-settings.js';
 
 const router = Router();
 
@@ -35,7 +42,16 @@ router.get('/overview', async (_req, res) => {
     const weekStart = new Date(todayStart);
     weekStart.setDate(weekStart.getDate() - 7);
 
-    const [bugsToday, prsToday, prsAccepted, activeAgents, queuedAgents, lastScan, lastAudit] =
+    const [
+      bugsToday,
+      prsToday,
+      prsAccepted,
+      activeAgents,
+      queuedAgents,
+      lastScan,
+      lastAudit,
+      runtimeSettings,
+    ] =
       await Promise.all([
         BugReportModel.countDocuments({ createdAt: { $gte: todayStart } }),
         PullRequestModel.countDocuments({ createdAt: { $gte: todayStart } }),
@@ -53,6 +69,7 @@ router.get('/overview', async (_req, res) => {
           .sort({ startedAt: -1 })
           .select('startedAt')
           .lean(),
+        getRuntimeSettings(),
       ]);
 
     const stats: OverviewStats = {
@@ -64,12 +81,42 @@ router.get('/overview', async (_req, res) => {
       lastScanAt: lastScan?.startedAt,
       lastAuditAt: lastAudit?.startedAt,
       systemStatus: 'running', // TODO: derive from actual system state
+      cliBackend: runtimeSettings.cliBackend,
     };
 
     res.json(stats);
   } catch (err) {
     console.error('[API] GET /state/overview failed:', err);
     res.status(500).json({ error: 'Failed to fetch overview stats' });
+  }
+});
+
+// GET /api/state/runtime — get current runtime settings
+router.get('/runtime', async (_req, res) => {
+  try {
+    const settings = await getRuntimeSettings();
+    res.json(settings);
+  } catch (err) {
+    console.error('[API] GET /state/runtime failed:', err);
+    res.status(500).json({ error: 'Failed to fetch runtime settings' });
+  }
+});
+
+// PUT /api/state/runtime — update runtime settings
+router.put('/runtime', async (req, res) => {
+  try {
+    const { cliBackend } = req.body as Partial<UpdateRuntimeSettingsRequest>;
+
+    if (cliBackend !== 'claude' && cliBackend !== 'codex') {
+      res.status(400).json({ error: 'cliBackend must be "claude" or "codex"' });
+      return;
+    }
+
+    const settings = await updateRuntimeSettings(cliBackend);
+    res.json(settings);
+  } catch (err) {
+    console.error('[API] PUT /state/runtime failed:', err);
+    res.status(500).json({ error: 'Failed to update runtime settings' });
   }
 });
 

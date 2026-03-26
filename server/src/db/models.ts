@@ -3,6 +3,7 @@ import type {
   SREState,
   KnownIssue,
   SREBaselines,
+  RuntimeSettings,
   ScanResult,
   ScanConfig,
   LogPattern,
@@ -168,6 +169,44 @@ export const SREStateModel = mongoose.model<SREStateDocument, SREStateModelType>
   'SREState',
   sreStateSchema,
 );
+
+// ============================================
+// Runtime Settings (singleton)
+// ============================================
+
+interface RuntimeSettingsDocument extends RuntimeSettings, mongoose.Document<string> {
+  _id: string;
+}
+
+interface RuntimeSettingsModelType extends Model<RuntimeSettingsDocument> {
+  getOrCreateSettings(): Promise<RuntimeSettingsDocument>;
+}
+
+const runtimeSettingsSchema = new Schema<RuntimeSettingsDocument>(
+  {
+    _id: { type: String, default: 'singleton' },
+    cliBackend: { type: String, enum: ['claude', 'codex'], required: true },
+    updatedAt: { type: Date, required: true },
+  },
+  { collection: 'runtime_settings' },
+);
+
+runtimeSettingsSchema.statics.getOrCreateSettings = async function (): Promise<RuntimeSettingsDocument> {
+  let settings = await this.findById('singleton');
+  if (!settings) {
+    settings = await this.create({
+      _id: 'singleton',
+      cliBackend: 'codex',
+      updatedAt: new Date(),
+    });
+  }
+  return settings;
+};
+
+export const RuntimeSettingsModel = mongoose.model<
+  RuntimeSettingsDocument,
+  RuntimeSettingsModelType
+>('RuntimeSettings', runtimeSettingsSchema);
 
 // ============================================
 // Scan Results

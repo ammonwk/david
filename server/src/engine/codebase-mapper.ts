@@ -15,7 +15,8 @@ import { completeWithGeminiPro, completeWithGeminiFlash } from '../llm/openroute
 import { buildL1DiscoveryPrompt, buildL2DiscoveryPrompt, buildL3DiscoveryPrompt } from '../agents/prompts.js';
 import { CodebaseTopologyModel } from '../db/models.js';
 import { socketManager } from '../ws/socket-manager.js';
-import { config } from '../config.js';
+import { createSnapshotWorktree, removeWorktreeByPath } from '../agents/worktree-manager.js';
+import { ensureControlRepo } from '../repo/repo-manager.js';
 import type { TopologyNode, CodebaseTopology } from 'david-shared';
 
 // ---------------------------------------------------------------------------
@@ -52,75 +53,78 @@ export class CodebaseMapper {
 
   async mapCodebase(): Promise<string> {
     console.log('[CodebaseMapper] Starting codebase mapping pipeline');
+    const repo = await ensureControlRepo(true);
+    const snapshot = await createSnapshotWorktree(`map-${Date.now()}`);
 
-    // 1. Emit topology:mapping-started
-    socketManager.emitTopologyMappingStarted({
-      topologyId: '',  // Will be set once persisted
-    });
-
-    // 2. Phase 1: Filesystem walk
-    console.log('[CodebaseMapper] Phase 1: Walking filesystem...');
-    const walkResult = await walkRepo();
-    const treeText = formatTreeForLLM(walkResult.tree);
-
-    console.log(
-      `[CodebaseMapper] Walk complete: ${walkResult.totalFiles} files, ` +
-      `${walkResult.totalLines.toLocaleString()} lines`,
-    );
-
-    // 3. Get current git commit hash
-    let commitHash: string;
     try {
-      commitHash = execSync('git rev-parse HEAD', {
-        cwd: config.targetRepoPath,
-        encoding: 'utf-8',
-      }).trim();
-    } catch {
-      console.warn('[CodebaseMapper] Could not get git commit hash, using "unknown"');
-      commitHash = 'unknown';
-    }
+      // 1. Emit topology:mapping-started
+      socketManager.emitTopologyMappingStarted({
+        topologyId: '',  // Will be set once persisted
+      });
 
-    // 4. Phase 2: L1 Discovery (single gemini-pro call)
-    console.log('[CodebaseMapper] Phase 2: L1 Discovery...');
-    const l1Groups = await this.discoverL1(treeText);
-    console.log(`[CodebaseMapper] L1 complete: ${l1Groups.length} groups`);
+      // 2. Phase 1: Filesystem walk
+      console.log('[CodebaseMapper] Phase 1: Walking filesystem...');
+      const walkResult = await walkRepo(snapshot.path);
+      const treeText = formatTreeForLLM(walkResult.tree);
 
-    const allNodes: TopologyNode[] = [];
+      console.log(
+        `[CodebaseMapper] Walk complete: ${walkResult.totalFiles} files, ` +
+        `${walkResult.totalLines.toLocaleString()} lines`,
+      );
 
-    // Create L1 topology nodes
-    const l1Nodes: TopologyNode[] = l1Groups.map((group) => {
-      const matchedFiles = this.matchFilesToGroup(walkResult.files, group.includes);
-      const totalLines = matchedFiles.reduce((sum, f) => sum + f.lines, 0);
+      // 3. Get current git commit hash
+      let commitHash: string;
+      try {
+        commitHash = execSync('git rev-parse HEAD', {
+          cwd: snapshot.path,
+          encoding: 'utf-8',
+        }).trim();
+      } catch {
+        console.warn('[CodebaseMapper] Could not get git commit hash, using "unknown"');
+        commitHash = 'unknown';
+      }
 
-      return {
-        id: this.generateNodeId(1, group.name),
-        name: group.name,
-        description: group.description,
-        level: 1 as const,
-        parentId: null,
-        files: matchedFiles.map((f) => f.relativePath),
-        totalLines,
-        children: [],
-      };
-    });
+      // 4. Phase 2: L1 Discovery (single gemini-pro call)
+      console.log('[CodebaseMapper] Phase 2: L1 Discovery...');
+      const l1Groups = await this.discoverL1(treeText);
+      console.log(`[CodebaseMapper] L1 complete: ${l1Groups.length} groups`);
 
-    allNodes.push(...l1Nodes);
+      const allNodes: TopologyNode[] = [];
 
-    // 5. Phase 3: L2 Discovery (parallel gemini-flash calls)
-    console.log('[CodebaseMapper] Phase 3: L2 Discovery...');
-    const l2Results = await Promise.all(
-      l1Nodes.map(async (l1Node, idx) => {
-        try {
-          return await this.discoverL2(l1Node, l1Groups[idx], walkResult.files);
-        } catch (err) {
-          console.error(
-            `[CodebaseMapper] L2 discovery failed for "${l1Node.name}":`,
-            err instanceof Error ? err.message : err,
-          );
-          return [];
-        }
-      }),
-    );
+      // Create L1 topology nodes
+      const l1Nodes: TopologyNode[] = l1Groups.map((group) => {
+        const matchedFiles = this.matchFilesToGroup(walkResult.files, group.includes);
+        const totalLines = matchedFiles.reduce((sum, f) => sum + f.lines, 0);
+
+        return {
+          id: this.generateNodeId(1, group.name),
+          name: group.name,
+          description: group.description,
+          level: 1 as const,
+          parentId: null,
+          files: matchedFiles.map((f) => f.relativePath),
+          totalLines,
+          children: [],
+        };
+      });
+
+      allNodes.push(...l1Nodes);
+
+      // 5. Phase 3: L2 Discovery (parallel gemini-flash calls)
+      console.log('[CodebaseMapper] Phase 3: L2 Discovery...');
+      const l2Results = await Promise.all(
+        l1Nodes.map(async (l1Node, idx) => {
+          try {
+            return await this.discoverL2(l1Node, l1Groups[idx], walkResult.files);
+          } catch (err) {
+            console.error(
+              `[CodebaseMapper] L2 discovery failed for "${l1Node.name}":`,
+              err instanceof Error ? err.message : err,
+            );
+            return [];
+          }
+        }),
+      );
 
     const allL2Nodes: TopologyNode[] = [];
 
@@ -201,30 +205,39 @@ export class CodebaseMapper {
 
     // 7. Phase 5: Persist to MongoDB
     console.log('[CodebaseMapper] Phase 5: Persisting topology...');
-    const topologyDoc = await CodebaseTopologyModel.create({
-      mappedAt: new Date(),
-      commitHash,
-      repoPath: config.targetRepoPath,
-      fileCount: walkResult.totalFiles,
-      totalLines: walkResult.totalLines,
-      nodes: allNodes,
-    });
+      const topologyDoc = await CodebaseTopologyModel.create({
+        mappedAt: new Date(),
+        commitHash,
+        repoPath: repo.controlRepoPath,
+        fileCount: walkResult.totalFiles,
+        totalLines: walkResult.totalLines,
+        nodes: allNodes,
+      });
 
-    const topologyId = topologyDoc._id.toString();
+      const topologyId = topologyDoc._id.toString();
 
-    console.log(
-      `[CodebaseMapper] Topology persisted: id=${topologyId}, ` +
-      `${allNodes.length} nodes (${l1Nodes.length} L1, ${allL2Nodes.length} L2, ${allL3Nodes.length} L3)`,
-    );
+      console.log(
+        `[CodebaseMapper] Topology persisted: id=${topologyId}, ` +
+        `${allNodes.length} nodes (${l1Nodes.length} L1, ${allL2Nodes.length} L2, ${allL3Nodes.length} L3)`,
+      );
 
-    // 8. Emit topology:mapping-completed
-    socketManager.emitTopologyMappingCompleted({
-      topologyId,
-      nodeCount: allNodes.length,
-      fileCount: walkResult.totalFiles,
-    });
+      // 8. Emit topology:mapping-completed
+      socketManager.emitTopologyMappingCompleted({
+        topologyId,
+        nodeCount: allNodes.length,
+        fileCount: walkResult.totalFiles,
+      });
 
-    return topologyId;
+      return topologyId;
+    } finally {
+      await removeWorktreeByPath(snapshot.path, snapshot.branch).catch((err) => {
+        console.warn(
+          `[CodebaseMapper] Failed to clean up snapshot worktree ${snapshot.path}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
+    }
   }
 
   // ------------------------------------------------------------------

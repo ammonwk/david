@@ -14,6 +14,8 @@ import type {
   OverviewStats,
   PipelineItem,
   HealthVitals,
+  RuntimeSettings,
+  UpdateRuntimeSettingsRequest,
 } from 'david-shared';
 
 const BASE_URL = '/api';
@@ -76,6 +78,12 @@ export const api = {
 
   // SRE State
   getSREState: () => request<SREState>('/state'),
+  getRuntimeSettings: () => request<RuntimeSettings>('/state/runtime'),
+  updateRuntimeSettings: (updates: UpdateRuntimeSettingsRequest) =>
+    request<RuntimeSettings>('/state/runtime', {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    }),
 
   // Bug Reports
   getBugReports: (filters?: { status?: string; source?: string }) => {

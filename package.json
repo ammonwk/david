@@ -11,7 +11,7 @@
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:dashboard\"",
     "dev:server": "cd server && npm run dev",
     "dev:dashboard": "cd dashboard && npm run dev",
-    "build": "npm run build --workspaces"
+    "build": "npm run build -w shared && npm run build -w server && npm run build -w dashboard"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

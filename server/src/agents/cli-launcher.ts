@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { config } from '../config.js';
+import { getCLIBackend } from '../runtime/runtime-settings.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -135,7 +136,7 @@ class CLIProcessImpl extends EventEmitter implements CLIProcess {
         if (!trimmed) continue;
         try {
           const msg: CLIMessage = JSON.parse(trimmed);
-          if (config.cliBackend === 'codex') {
+          if (getCLIBackend() === 'codex') {
             this.handleCodexMessage(msg);
           } else {
             this.handleClaudeMessage(msg);
@@ -180,7 +181,7 @@ class CLIProcessImpl extends EventEmitter implements CLIProcess {
       if (this.stdoutBuffer.trim()) {
         try {
           const msg: CLIMessage = JSON.parse(this.stdoutBuffer.trim());
-          if (config.cliBackend === 'codex') {
+          if (getCLIBackend() === 'codex') {
             this.handleCodexMessage(msg);
           } else {
             this.handleClaudeMessage(msg);
@@ -377,7 +378,7 @@ export function launchCLI(options: CLILaunchOptions): CLIProcess {
 }
 
 function buildCLICommand(options: CLILaunchOptions): { binary: string; args: string[] } {
-  if (config.cliBackend === 'codex') {
+  if (getCLIBackend() === 'codex') {
     return buildCodexCommand(options);
   }
 
