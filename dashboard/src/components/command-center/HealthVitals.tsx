@@ -289,10 +289,6 @@ export function HealthVitals() {
     };
   }, [vitals]);
 
-  const handleChartClick = useCallback(() => {
-    // Future: expand chart to full detail view
-  }, []);
-
   // Acceptance rate calculation
   const acceptanceRate = useMemo(() => {
     if (!stats) return 0;
@@ -356,7 +352,7 @@ export function HealthVitals() {
               colorLight={RED_LIGHT}
               gradientId="cc-grad-error"
               thresholdValue={stats?.bugsFoundToday ? Math.ceil(stats.bugsFoundToday * 1.5) : undefined}
-              onClick={handleChartClick}
+
             />
             <MiniChart
               title={`Agent Throughput (${timeframe})`}
@@ -364,7 +360,7 @@ export function HealthVitals() {
               color={BLUE}
               colorLight={BLUE_LIGHT}
               gradientId="cc-grad-throughput"
-              onClick={handleChartClick}
+
             />
             <MiniChart
               title={`Queue Depth (${timeframe})`}
@@ -372,7 +368,7 @@ export function HealthVitals() {
               color={AMBER}
               colorLight={AMBER_LIGHT}
               gradientId="cc-grad-queue"
-              onClick={handleChartClick}
+
             />
             <MiniChart
               title={`PR Acceptance (${timeframe})`}
@@ -380,7 +376,7 @@ export function HealthVitals() {
               color={GREEN}
               colorLight={GREEN_LIGHT}
               gradientId="cc-grad-acceptance"
-              onClick={handleChartClick}
+
             />
           </>
         )}

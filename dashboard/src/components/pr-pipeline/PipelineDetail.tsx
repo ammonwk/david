@@ -203,15 +203,34 @@ export function PipelineDetail({ card, onClose }: PipelineDetailProps) {
           }
         }
 
-        // Fetch agents
+        // Fetch agents — check both the live pool and DB (for completed agents)
         try {
+          const found: AgentRecord[] = [];
+          const seenIds = new Set<string>();
+
+          // First, check the live pool for any running agents on this task
           const pool = await api.getAgents();
-          const relatedAgents = pool.agents.filter(
-            (a) =>
-              a.taskId === matchedBug._id ||
-              a._id === matchedBug.fixAgentId,
-          );
-          setAgents(relatedAgents);
+          for (const a of pool.agents) {
+            if (a.taskId === matchedBug._id || a._id === matchedBug.fixAgentId) {
+              if (a._id && !seenIds.has(a._id)) {
+                seenIds.add(a._id);
+                found.push(a);
+              }
+            }
+          }
+
+          // If the bug has a fixAgentId and we didn't find it in the pool,
+          // fetch it directly (falls back to MongoDB for completed agents)
+          if (matchedBug.fixAgentId && !seenIds.has(matchedBug.fixAgentId)) {
+            try {
+              const agent = await api.getAgent(matchedBug.fixAgentId);
+              if (agent) found.push(agent);
+            } catch {
+              // Agent record might have been cleaned up
+            }
+          }
+
+          setAgents(found);
         } catch {
           // Agents might not be available
         }

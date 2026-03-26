@@ -4,6 +4,7 @@
 // ============================================
 
 import { Router } from 'express';
+import mongoose from 'mongoose';
 import {
   SREStateModel,
   ScanResultModel,
@@ -93,7 +94,7 @@ export function createStateRouter(deps: StateRouterDeps) {
       queuedAgents,
       lastScanAt: lastScan?.startedAt,
       lastAuditAt: lastAudit?.startedAt,
-      systemStatus: 'running', // TODO: derive from actual system state
+      systemStatus: mongoose.connection.readyState === 1 ? 'running' : 'error',
       cliBackend: runtimeSettings.cliBackend,
     };
 

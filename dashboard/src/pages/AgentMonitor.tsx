@@ -78,12 +78,19 @@ export function AgentMonitor() {
 
           {/* Pool capacity gauge */}
           <div className="hidden sm:block">
-            <PoolBar
-              active={pool?.activeCount ?? 0}
-              max={pool?.maxConcurrent ?? 30}
-              queued={pool?.queuedCount ?? 0}
-              activeByType={activeByType}
-            />
+            {loading && agents.length === 0 ? (
+              <div className="flex items-center gap-3">
+                <div className="h-3 w-48 animate-pulse rounded-full bg-[var(--bg-tertiary)]" />
+                <div className="h-3 w-20 animate-pulse rounded bg-[var(--bg-tertiary)]" />
+              </div>
+            ) : (
+              <PoolBar
+                active={pool?.activeCount ?? 0}
+                max={pool?.maxConcurrent ?? 30}
+                queued={pool?.queuedCount ?? 0}
+                activeByType={activeByType}
+              />
+            )}
           </div>
         </div>
 
@@ -118,12 +125,19 @@ export function AgentMonitor() {
 
       {/* ── Pool gauge for mobile (below header) ──────────── */}
       <div className="sm:hidden">
-        <PoolBar
-          active={pool?.activeCount ?? 0}
-          max={pool?.maxConcurrent ?? 30}
-          queued={pool?.queuedCount ?? 0}
-          activeByType={activeByType}
-        />
+        {loading && agents.length === 0 ? (
+          <div className="flex items-center gap-3">
+            <div className="h-3 w-48 animate-pulse rounded-full bg-[var(--bg-tertiary)]" />
+            <div className="h-3 w-20 animate-pulse rounded bg-[var(--bg-tertiary)]" />
+          </div>
+        ) : (
+          <PoolBar
+            active={pool?.activeCount ?? 0}
+            max={pool?.maxConcurrent ?? 30}
+            queued={pool?.queuedCount ?? 0}
+            activeByType={activeByType}
+          />
+        )}
       </div>
 
       {/* ── Error banner ─────────────────────────────────── */}

@@ -241,10 +241,18 @@ async function main() {
     );
     console.log('[startup] PR tracker polling started');
 
+    startupPhase = 'recovering crashed agents';
+    let activeAgentBranches = new Set<string>();
+    try {
+      const { agentPool } = await import('./agents/agent-pool.js');
+      activeAgentBranches = await agentPool.recoverCrashedAgents();
+    } catch (err) {
+      console.warn('[startup] Crashed agent recovery failed (non-fatal):', err);
+    }
+
     startupPhase = 'cleaning orphaned worktrees';
     try {
       const { cleanupOrphanedWorktrees } = await import('./agents/worktree-manager.js');
-      const activeAgentBranches = new Set<string>(); // No active agents on startup
       const cleaned = await cleanupOrphanedWorktrees(activeAgentBranches);
       if (cleaned > 0) console.log(`[startup] Cleaned up ${cleaned} orphaned worktrees`);
     } catch (err) {

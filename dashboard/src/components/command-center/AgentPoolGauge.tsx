@@ -81,7 +81,7 @@ function SegmentTooltip({ data, x, y }: { data: TooltipData; x: number; y: numbe
 export function AgentPoolGauge() {
   const navigate = useNavigate();
   const poolStatus = usePoolStatus();
-  const { agents } = useAgents();
+  const { agents, loading } = useAgents();
   const [tooltip, setTooltip] = useState<{ data: TooltipData; x: number; y: number } | null>(null);
 
   // Separate active (running/starting) vs queued vs recently completed
@@ -179,6 +179,29 @@ export function AgentPoolGauge() {
   };
 
   const utilizationPct = maxPool > 0 ? Math.round((activeCount / maxPool) * 100) : 0;
+
+  // Show skeleton while initial data is loading
+  if (loading && agents.length === 0) {
+    return (
+      <div className="flex h-full flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
+            <Bot className="h-4 w-4 text-[var(--accent-blue)]" strokeWidth={2} />
+            Agent Pool
+          </h2>
+          <div className="h-3 w-16 animate-pulse rounded bg-[var(--bg-tertiary)]" />
+        </div>
+        <div className="flex flex-1 gap-3 overflow-hidden">
+          <div className="w-10 flex-1 animate-pulse rounded-lg bg-[var(--bg-tertiary)]" />
+          <div className="flex flex-1 flex-col justify-center gap-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-14 animate-pulse rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)]" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col gap-3">

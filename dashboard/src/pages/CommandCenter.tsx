@@ -1,5 +1,5 @@
 import { AgentPoolGauge } from '../components/command-center/AgentPoolGauge';
-import { EventTimeline } from '../components/command-center/EventTimeline';
+import { CodebaseHealth } from '../components/command-center/CodebaseHealth';
 import { HealthVitals } from '../components/command-center/HealthVitals';
 
 /**
@@ -7,7 +7,7 @@ import { HealthVitals } from '../components/command-center/HealthVitals';
  *
  * Three-column operational summary filling the full viewport height:
  * - Left: Agent Pool Gauge (pool capacity visualization)
- * - Center: Live Event Timeline (auto-scrolling system events)
+ * - Center: Codebase Health (known issues, resolved issues, baselines)
  * - Right: Health Vitals (mini charts + stat grid)
  */
 export function CommandCenter() {
@@ -21,9 +21,9 @@ export function CommandCenter() {
         <AgentPoolGauge />
       </section>
 
-      {/* Center — Live Event Timeline */}
+      {/* Center — Codebase Health */}
       <section className="flex flex-col overflow-hidden rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] p-3">
-        <EventTimeline />
+        <CodebaseHealth />
       </section>
 
       {/* Right — Health Vitals */}

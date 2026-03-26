@@ -5,33 +5,12 @@
 // ============================================
 
 import type { PullRequestRecord, BugReport, PRStatus } from 'david-shared';
+import { Octokit } from '@octokit/rest';
 import { config } from '../config.js';
 import { learningEngine } from './learning-engine.js';
+import { PullRequestModel, BugReportModel } from '../db/models.js';
 
-// Lazy-load models to handle the case where DB might not be wired up yet
-let PullRequestModel: any;
-let BugReportModel: any;
-try {
-  const models = await import('../db/models.js');
-  PullRequestModel = models.PullRequestModel;
-  BugReportModel = models.BugReportModel;
-} catch {
-  console.warn('[PRTracker] Could not import DB models — DB operations will be no-ops until models are available.');
-}
-
-// Lazy-load Octokit for GitHub API calls
-let octokit: any = null;
-async function getOctokit() {
-  if (octokit) return octokit;
-  try {
-    const { Octokit } = await import('@octokit/rest');
-    octokit = new Octokit({ auth: config.githubToken });
-    return octokit;
-  } catch {
-    console.warn('[PRTracker] Could not import @octokit/rest — GitHub polling disabled.');
-    return null;
-  }
-}
+const octokit = new Octokit({ auth: config.githubToken });
 
 export class PRTracker {
   private pollInterval: NodeJS.Timeout | null = null;
@@ -83,11 +62,8 @@ export class PRTracker {
    * Fetches the current status from GitHub and updates the DB if it has changed.
    */
   async checkPR(prNumber: number): Promise<void> {
-    const gh = await getOctokit();
-    if (!gh) return;
-
     try {
-      const { data: ghPR } = await gh.pulls.get({
+      const { data: ghPR } = await octokit.pulls.get({
         owner: config.githubOwner,
         repo: config.githubRepo,
         pull_number: prNumber,
@@ -99,10 +75,8 @@ export class PRTracker {
           ? 'closed'
           : 'open';
 
-      // Update the DB record if PullRequestModel is available
-      if (PullRequestModel) {
-        const existing = await PullRequestModel.findOne({ prNumber });
-        if (existing && existing.status !== newStatus && newStatus !== 'open') {
+      const existing = await PullRequestModel.findOne({ prNumber });
+      if (existing && existing.status !== newStatus && newStatus !== 'open') {
           const resolution = newStatus === 'merged' ? 'accepted' as const : 'rejected' as const;
 
           // Fetch review comments for feedback
@@ -124,7 +98,7 @@ export class PRTracker {
             const bugReport = await this.fetchBugReport(existing.bugReportId);
             if (bugReport) {
               await learningEngine.recordOutcome({
-                pr: existing.toObject(),
+                pr: existing.toObject() as unknown as PullRequestRecord,
                 bugReport,
                 resolution,
                 feedbackComments,
@@ -135,7 +109,6 @@ export class PRTracker {
           } catch (err) {
             console.error(`[PRTracker] Failed to record learning outcome for PR #${prNumber}:`, err);
           }
-        }
       }
     } catch (err) {
       console.error(`[PRTracker] Failed to check PR #${prNumber}:`, err);
@@ -157,9 +130,6 @@ export class PRTracker {
     updatePR: (id: string, updates: Partial<PullRequestRecord>) => Promise<void>,
     onStatusChange: (pr: PullRequestRecord, newStatus: string) => void,
   ): Promise<void> {
-    const gh = await getOctokit();
-    if (!gh) return;
-
     let openPRs: PullRequestRecord[];
     try {
       openPRs = await getOpenPRs();
@@ -174,7 +144,7 @@ export class PRTracker {
 
     for (const pr of openPRs) {
       try {
-        const { data: ghPR } = await gh.pulls.get({
+        const { data: ghPR } = await octokit.pulls.get({
           owner: config.githubOwner,
           repo: config.githubRepo,
           pull_number: pr.prNumber,
@@ -249,14 +219,11 @@ export class PRTracker {
    * Returns an array of comment body strings (from both review comments and issue comments).
    */
   private async fetchReviewComments(prNumber: number): Promise<string[]> {
-    const gh = await getOctokit();
-    if (!gh) return [];
-
     const comments: string[] = [];
 
     try {
       // Fetch PR review comments (inline code comments)
-      const { data: reviewComments } = await gh.pulls.listReviewComments({
+      const { data: reviewComments } = await octokit.pulls.listReviewComments({
         owner: config.githubOwner,
         repo: config.githubRepo,
         pull_number: prNumber,
@@ -270,7 +237,7 @@ export class PRTracker {
       }
 
       // Fetch PR reviews (top-level review bodies)
-      const { data: reviews } = await gh.pulls.listReviews({
+      const { data: reviews } = await octokit.pulls.listReviews({
         owner: config.githubOwner,
         repo: config.githubRepo,
         pull_number: prNumber,
@@ -284,7 +251,7 @@ export class PRTracker {
       }
 
       // Fetch issue comments (general PR conversation)
-      const { data: issueComments } = await gh.issues.listComments({
+      const { data: issueComments } = await octokit.issues.listComments({
         owner: config.githubOwner,
         repo: config.githubRepo,
         issue_number: prNumber,
@@ -307,8 +274,6 @@ export class PRTracker {
    * Fetch the bug report associated with a PR from the database.
    */
   private async fetchBugReport(bugReportId: string): Promise<BugReport | null> {
-    if (!BugReportModel) return null;
-
     try {
       const doc = await BugReportModel.findById(bugReportId).lean();
       return doc as BugReport | null;

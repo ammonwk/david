@@ -10,7 +10,8 @@
 
 import { EventEmitter } from 'events';
 import { config } from '../config.js';
-import type { AgentType, AgentStatus, AgentRecord, AgentResult } from 'david-shared';
+import type { AgentType, AgentStatus, AgentRecord, AgentResult, WorktreeType } from 'david-shared';
+import type { WorktreeInfo } from './worktree-manager.js';
 // Note: will import from ./cli-launcher.js at runtime — code against the interface
 // import { launchCLI, killWithEscalation, type CLIProcess, type CLILaunchOptions } from './cli-launcher.js';
 
@@ -18,20 +19,34 @@ import type { AgentType, AgentStatus, AgentRecord, AgentResult } from 'david-sha
 // Types
 // ============================================
 
+/** Configuration for deferred (lazy) worktree creation. */
+export interface WorktreeConfig {
+  /** The bugId or taskId used to name the worktree. */
+  identifier: string;
+  /** 'branch' creates sre/{id} branch; 'snapshot' creates detached HEAD. */
+  type: WorktreeType;
+}
+
 export interface ManagedAgentOptions {
   id: string;
   type: AgentType;
-  prompt: string;
+  /** Either a static prompt string, or a function that receives the resolved cwd and returns the prompt. */
+  prompt: string | ((resolvedCwd: string) => string | Promise<string>);
   cwd: string;
   taskId: string;
   nodeId?: string;
   parentAgentId?: string;
+  /** Pre-created worktree path (legacy — prefer worktreeConfig for lazy creation). */
   worktreePath?: string;
   branch?: string;
+  /** Deferred worktree creation config. The worktree is created just before the agent starts. */
+  worktreeConfig?: WorktreeConfig;
   timeoutMs?: number;
   maxRestarts?: number;
   systemPrompt?: string;
   env?: Record<string, string>;
+  /** Pre-set CLI session ID for resuming a previous session (used during crash recovery). */
+  cliSessionId?: string;
 }
 
 export interface ManagedAgentServices {
@@ -42,6 +57,7 @@ export interface ManagedAgentServices {
     systemPrompt?: string;
     env?: Record<string, string>;
   }) => any | Promise<any>;
+  createWorktree?: (wtConfig: WorktreeConfig) => Promise<WorktreeInfo>;
 }
 
 /** Maximum number of output lines kept in memory. */
@@ -71,8 +87,13 @@ export class ManagedAgent extends EventEmitter {
   readonly taskId: string;
   readonly nodeId?: string;
   readonly parentAgentId?: string;
-  readonly worktreePath?: string;
-  readonly branch?: string;
+
+  // ---- Mutable fields (set after lazy worktree creation) ----
+  worktreePath?: string;
+  branch?: string;
+
+  // ---- Worktree config for deferred creation ----
+  readonly worktreeConfig?: WorktreeConfig;
 
   // ---- Private state ----
   private status: AgentStatus = 'queued';
@@ -87,7 +108,9 @@ export class ManagedAgent extends EventEmitter {
   private timeoutTimer: NodeJS.Timeout | null = null;
   private outputLog: string[] = [];
   private result: AgentResult | null = null;
-  private prompt: string;
+  private promptInput: string | ((resolvedCwd: string) => string | Promise<string>);
+  /** Resolved prompt string (set after worktree creation for deferred prompts). */
+  private resolvedPrompt: string | null = null;
   private cwd: string;
   private systemPrompt?: string;
   private env?: Record<string, string>;
@@ -101,18 +124,25 @@ export class ManagedAgent extends EventEmitter {
 
     this.id = options.id;
     this.type = options.type;
-    this.prompt = options.prompt;
+    this.promptInput = options.prompt;
+    if (typeof options.prompt === 'string') {
+      this.resolvedPrompt = options.prompt;
+    }
     this.cwd = options.cwd;
     this.taskId = options.taskId;
     this.nodeId = options.nodeId;
     this.parentAgentId = options.parentAgentId;
     this.worktreePath = options.worktreePath;
     this.branch = options.branch;
+    this.worktreeConfig = options.worktreeConfig;
     this.timeoutMs = options.timeoutMs ?? config.agentTimeoutMs;
     this.maxRestarts = options.maxRestarts ?? config.agentMaxRestarts;
     this.systemPrompt = options.systemPrompt;
     this.env = options.env;
     this.services = services;
+    if (options.cliSessionId) {
+      this.cliSessionId = options.cliSessionId;
+    }
   }
 
   // ============================================
@@ -124,6 +154,24 @@ export class ManagedAgent extends EventEmitter {
     this.setStatus('starting');
 
     try {
+      // Lazy worktree creation: spin up the worktree right before the agent runs
+      if (this.worktreeConfig && !this.worktreePath) {
+        const createWt = this.services.createWorktree ?? await this.loadDefaultCreateWorktree();
+        const info = await createWt(this.worktreeConfig);
+        this.worktreePath = info.path;
+        this.branch = info.branch;
+        this.cwd = info.path;
+      }
+
+      // Resolve deferred prompt now that cwd is known
+      if (!this.resolvedPrompt) {
+        if (typeof this.promptInput === 'function') {
+          this.resolvedPrompt = await this.promptInput(this.cwd);
+        } else {
+          this.resolvedPrompt = this.promptInput;
+        }
+      }
+
       await this.launchProcess();
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -176,6 +224,10 @@ export class ManagedAgent extends EventEmitter {
       outputLog: this.outputLog.slice(-OUTPUT_LOG_DB_LINES),
       result: this.result ?? undefined,
       createdAt: this.createdAt,
+      prompt: this.resolvedPrompt ?? undefined,
+      systemPrompt: this.systemPrompt,
+      worktreeType: this.worktreeConfig?.type,
+      worktreeIdentifier: this.worktreeConfig?.identifier,
     };
   }
 
@@ -197,7 +249,7 @@ export class ManagedAgent extends EventEmitter {
     const launchCLI = this.services.launchCLI ?? await this.loadLaunchCLI();
 
     this.process = await launchCLI({
-      prompt: this.prompt,
+      prompt: this.resolvedPrompt!,
       cwd: this.worktreePath ?? this.cwd,
       systemPrompt: this.systemPrompt,
       env: this.env,
@@ -636,5 +688,35 @@ export class ManagedAgent extends EventEmitter {
   private async loadLaunchCLI(): Promise<NonNullable<ManagedAgentServices['launchCLI']>> {
     const { launchCLI } = await import('./cli-launcher.js');
     return launchCLI;
+  }
+
+  private async loadDefaultCreateWorktree(): Promise<NonNullable<ManagedAgentServices['createWorktree']>> {
+    const { createWorktree, createSnapshotWorktree } = await import('./worktree-manager.js');
+    return async (wtConfig: WorktreeConfig) => {
+      if (wtConfig.type === 'snapshot') {
+        return createSnapshotWorktree(wtConfig.identifier);
+      }
+      return createWorktree(wtConfig.identifier);
+    };
+  }
+
+  /**
+   * Clean up the agent's worktree (if it owns one via worktreeConfig).
+   * Called by the pool or engine code after the agent reaches a terminal state
+   * and all result-processing is complete.
+   */
+  async cleanupWorktree(): Promise<void> {
+    if (!this.worktreeConfig || !this.worktreePath) return;
+
+    try {
+      const { removeWorktreeByPath } = await import('./worktree-manager.js');
+      await removeWorktreeByPath(this.worktreePath, this.branch);
+      console.log(`[managed-agent] Cleaned up worktree for ${this.id} at ${this.worktreePath}`);
+    } catch (err) {
+      console.warn(
+        `[managed-agent] Failed to clean up worktree for ${this.id}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 }

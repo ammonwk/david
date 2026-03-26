@@ -238,6 +238,9 @@ export interface AgentResult {
   summary: string;
 }
 
+/** Whether the agent uses a branch worktree or a detached snapshot. */
+export type WorktreeType = 'branch' | 'snapshot';
+
 /**
  * Persistent record of a single agent execution.
  * Tracks lifecycle, output log, restart count, and final result.
@@ -260,6 +263,14 @@ export interface AgentRecord {
   outputLog: string[];
   result?: AgentResult;
   createdAt: Date;
+  /** Stored for retry/re-dispatch after crash. */
+  prompt?: string;
+  /** Stored for retry/re-dispatch after crash. */
+  systemPrompt?: string;
+  /** Worktree type used by this agent ('branch' or 'snapshot'). */
+  worktreeType?: WorktreeType;
+  /** Identifier used to name the worktree (bugId or taskId). */
+  worktreeIdentifier?: string;
 }
 
 // ============================================

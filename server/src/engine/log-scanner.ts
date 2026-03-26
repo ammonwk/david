@@ -15,14 +15,6 @@ import { socketManager } from '../ws/socket-manager.js';
 import { ScanResultModel, BugReportModel, SREStateModel, CodebaseTopologyModel, PullRequestModel } from '../db/models.js';
 import { learningEngine } from '../pr/learning-engine.js';
 import { createPR, getPRDiff } from '../pr/pr-manager.js';
-import {
-  createWorktree,
-  createSnapshotWorktree,
-  removeWorktreeByPath,
-  getBranchName,
-  getWorktreePath,
-  type WorktreeInfo,
-} from '../agents/worktree-manager.js';
 import { config } from '../config.js';
 import type { ManagedAgent } from '../agents/managed-agent.js';
 import type {
@@ -213,48 +205,11 @@ export class LogScanner {
       };
     }
 
-    // 6. Create a detached snapshot worktree from the latest remote base branch
-    let snapshotWorktree: WorktreeInfo | undefined;
-    try {
-      snapshotWorktree = await createSnapshotWorktree(`scan-${scanId}`);
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error(`${LOG_TAG} Failed to create snapshot worktree for scan ${scanId}:`, errorMsg);
-      await this.markScanFailed(scanId, scanConfig, `Failed to create analysis snapshot: ${errorMsg}`);
-      return scanId;
-    }
-
-    const cleanupSnapshotWorktree = async () => {
-      if (!snapshotWorktree) return;
-      const pathToRemove = snapshotWorktree.path;
-      const branchToRemove = snapshotWorktree.branch;
-      snapshotWorktree = undefined;
-
-      try {
-        await removeWorktreeByPath(pathToRemove, branchToRemove);
-      } catch (err) {
-        console.warn(
-          `${LOG_TAG} Failed to clean up snapshot worktree ${pathToRemove}:`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    };
-
-    // 7. Build the analysis agent prompt
+    // 6. Build the analysis agent prompt (deferred — needs worktree path)
     const logData = this.formatLogData(prefetchResult.logPatterns, prefetchResult.rawLogEvents);
     const sreStateStr = this.formatSREState(sreState);
 
-    const prompt = buildLogAnalysisPrompt({
-      scanConfig,
-      logData,
-      sreState: sreStateStr,
-      topologySummary,
-      repoPath: snapshotWorktree.path,
-      mongoUri: config.mongodbUri,
-      learning,
-    });
-
-    // 8. Submit the analysis agent to the pool
+    // 7. Submit the analysis agent with a lazy snapshot worktree
     const agentId = randomUUID();
     const taskId = `log-scan-${scanId}`;
 
@@ -263,16 +218,22 @@ export class LogScanner {
       agent = await agentPool.submit({
         id: agentId,
         type: 'log-analysis',
-        prompt,
-        cwd: snapshotWorktree.path,
+        prompt: (repoPath: string) => buildLogAnalysisPrompt({
+          scanConfig,
+          logData,
+          sreState: sreStateStr,
+          topologySummary,
+          repoPath,
+          mongoUri: config.mongodbUri,
+          learning,
+        }),
+        cwd: process.cwd(), // placeholder — overridden by lazy worktree
         taskId,
-        worktreePath: snapshotWorktree.path,
-        branch: snapshotWorktree.branch,
+        worktreeConfig: { identifier: `scan-${scanId}`, type: 'snapshot' },
       });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`${LOG_TAG} Failed to submit analysis agent:`, errorMsg);
-      await cleanupSnapshotWorktree();
       await this.markScanFailed(scanId, scanConfig, `Failed to submit analysis agent: ${errorMsg}`);
       return scanId;
     }
@@ -283,7 +244,7 @@ export class LogScanner {
       status: 'running',
     });
 
-    // 9. Wire up completion handler
+    // 8. Wire up completion handler
     agent.on('status', async (status) => {
       try {
         if (status === 'completed') {
@@ -305,7 +266,8 @@ export class LogScanner {
           await this.markScanFailed(scanId, scanConfig, `Analysis agent ${status}`);
         }
       } finally {
-        await cleanupSnapshotWorktree();
+        // Clean up the lazily-created snapshot worktree
+        await agent.cleanupWorktree();
       }
     });
 
@@ -329,17 +291,7 @@ export class LogScanner {
       throw new Error(`Bug report ${bugReportId} not found`);
     }
 
-    // 2. Create a worktree for the fix
-    let worktreeInfo;
-    try {
-      worktreeInfo = await createWorktree(bugReportId);
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error(`${LOG_TAG} Failed to create worktree for bug ${bugReportId}:`, errorMsg);
-      throw err;
-    }
-
-    // 3. Load learning context
+    // 2. Load learning context
     let learning: LearningContext;
     try {
       const filePatterns = bugReport.affectedFiles.map((f: string) => {
@@ -357,18 +309,7 @@ export class LogScanner {
       };
     }
 
-    // 4. Build the fix agent prompt
-    const prompt = buildFixAgentPrompt({
-      bugDescription: `${bugReport.pattern}\n\nSuspected root cause: ${bugReport.suspectedRootCause}`,
-      verificationDetails: bugReport.verificationResult
-        ? `Method: ${bugReport.verificationResult.method}\nConfirmed: ${bugReport.verificationResult.confirmed}\nDetails: ${bugReport.verificationResult.details}`
-        : 'No verification performed yet — the bug was identified during log analysis.',
-      affectedFiles: bugReport.affectedFiles,
-      repoPath: worktreeInfo.path,
-      learning,
-    });
-
-    // 5. Submit to agent pool
+    // 3. Submit to agent pool with lazy worktree + deferred prompt
     const agentId = randomUUID();
     const taskId = `fix-${bugReportId}`;
 
@@ -381,11 +322,18 @@ export class LogScanner {
     const agent = await agentPool.submit({
       id: agentId,
       type: 'fix',
-      prompt,
-      cwd: worktreeInfo.path,
+      prompt: (repoPath: string) => buildFixAgentPrompt({
+        bugDescription: `${bugReport.pattern}\n\nSuspected root cause: ${bugReport.suspectedRootCause}`,
+        verificationDetails: bugReport.verificationResult
+          ? `Method: ${bugReport.verificationResult.method}\nConfirmed: ${bugReport.verificationResult.confirmed}\nDetails: ${bugReport.verificationResult.details}`
+          : 'No verification performed yet — the bug was identified during log analysis.',
+        affectedFiles: bugReport.affectedFiles,
+        repoPath,
+        learning,
+      }),
+      cwd: process.cwd(), // placeholder — overridden by lazy worktree
       taskId,
-      worktreePath: worktreeInfo.path,
-      branch: worktreeInfo.branch,
+      worktreeConfig: { identifier: bugReportId, type: 'branch' },
     });
 
     socketManager.emitAgentStarted({
@@ -401,6 +349,8 @@ export class LogScanner {
           await this.handleFixResult(agent, bugReportId);
         } catch (err) {
           console.error(`${LOG_TAG} Error handling fix result for bug ${bugReportId}:`, err);
+        } finally {
+          await agent.cleanupWorktree();
         }
       } else if (status === 'failed' || status === 'timeout') {
         console.error(`${LOG_TAG} Fix agent ${agentId} ${status} for bug ${bugReportId}`);
@@ -413,6 +363,7 @@ export class LogScanner {
           type: 'fix',
           status,
         });
+        await agent.cleanupWorktree();
       }
     });
 
@@ -420,7 +371,7 @@ export class LogScanner {
       socketManager.broadcastAgentOutput(agentId, line);
     });
 
-    console.log(`${LOG_TAG} Fix agent ${agentId} queued for bug ${bugReportId} in worktree ${worktreeInfo.path}`);
+    console.log(`${LOG_TAG} Fix agent ${agentId} queued for bug ${bugReportId}`);
   }
 
   // ------------------------------------------

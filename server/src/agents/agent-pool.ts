@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { config } from '../config.js';
 import { ManagedAgent, type ManagedAgentOptions } from './managed-agent.js';
+import { AgentModel } from '../db/models.js';
 import type { AgentStatus, AgentRecord, PoolStatusData } from 'david-shared';
 
 // ---------------------------------------------------------------------------
@@ -52,6 +53,9 @@ export class AgentPool extends EventEmitter {
     const agent = this.services.createAgent?.(options) ?? new ManagedAgent(options);
 
     this.wireAgentEvents(agent);
+
+    // Persist initial agent record to MongoDB
+    this.persistAgent(agent);
 
     if (this.active.size < this.maxConcurrent) {
       await this.startAgent(agent);
@@ -192,8 +196,11 @@ export class AgentPool extends EventEmitter {
    * Wire up event listeners on a ManagedAgent to integrate it with the pool.
    */
   private wireAgentEvents(agent: ManagedAgent): void {
-    // Forward status changes
+    // Forward status changes and persist to DB
     agent.on('status', (status: AgentStatus) => {
+      // Persist every status transition to MongoDB
+      this.persistAgent(agent);
+
       if (status === 'completed') {
         this.handleAgentDone(agent);
       } else if (status === 'failed' || status === 'timeout') {
@@ -223,6 +230,9 @@ export class AgentPool extends EventEmitter {
 
     try {
       await agent.start();
+      // Re-persist now that the prompt has been resolved (deferred prompts
+      // are null at construction time, so the initial persist may lack it).
+      this.persistAgent(agent);
       this.emit('agent:started', agent);
       console.log(
         `[agent-pool] Agent ${agent.id} started (active=${this.active.size}, queued=${this.queue.length})`,
@@ -313,6 +323,143 @@ export class AgentPool extends EventEmitter {
    */
   private emitPoolStatus(): void {
     this.emit('pool:status', this.getStatus());
+  }
+
+  // ---------------------------------------------------------------------------
+  // MongoDB persistence
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Persist the current agent state to MongoDB (fire-and-forget).
+   */
+  private persistAgent(agent: ManagedAgent): void {
+    const record = agent.toRecord();
+    AgentModel.findOneAndUpdate(
+      { _id: record._id },
+      record,
+      { upsert: true },
+    ).catch((err) => {
+      console.error(`[agent-pool] Failed to persist agent ${agent.id}:`, err.message ?? err);
+    });
+  }
+
+  /**
+   * Load historical agents from MongoDB (those not currently in memory).
+   * Merges with live in-memory agents and returns all, sorted by createdAt desc.
+   */
+  async getAgentsWithHistory(limit = 100): Promise<AgentRecord[]> {
+    const liveAgents = this.getAgents();
+    const liveQueue = this.getQueue();
+    const liveIds = new Set([
+      ...liveAgents.map(a => a._id),
+      ...liveQueue.map(a => a._id),
+    ]);
+
+    try {
+      const historicalDocs = await AgentModel
+        .find({ _id: { $nin: [...liveIds] } })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean() as unknown as AgentRecord[];
+
+      return [...liveAgents, ...historicalDocs].sort((a, b) => {
+        const timeA = (a.createdAt as Date)?.getTime?.() ?? 0;
+        const timeB = (b.createdAt as Date)?.getTime?.() ?? 0;
+        return timeB - timeA;
+      });
+    } catch (err) {
+      console.error('[agent-pool] Failed to load historical agents:', err);
+      return liveAgents;
+    }
+  }
+
+  /**
+   * Get a specific agent by ID — checks in-memory first, falls back to MongoDB.
+   */
+  async getAgentWithHistory(id: string): Promise<ManagedAgent | AgentRecord | undefined> {
+    const live = this.getAgent(id);
+    if (live) return live;
+
+    try {
+      const doc = await AgentModel.findById(id).lean() as unknown as AgentRecord | null;
+      return doc ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Resume agents that were interrupted by an unclean shutdown.
+   * Re-submits them to the pool so they can pick up where they left off
+   * (using --resume with their persisted CLI session ID).
+   *
+   * Returns the set of branch names belonging to resumed agents so the
+   * caller can exclude them from orphaned-worktree cleanup.
+   */
+  async recoverCrashedAgents(): Promise<Set<string>> {
+    const activeBranches = new Set<string>();
+
+    try {
+      const crashedDocs = await AgentModel.find({
+        status: { $in: ['queued', 'starting', 'running'] },
+      }).lean() as unknown as AgentRecord[];
+
+      if (crashedDocs.length === 0) return activeBranches;
+
+      console.log(`[agent-pool] Found ${crashedDocs.length} interrupted agent(s) — resuming`);
+
+      for (const record of crashedDocs) {
+        const agentId = record._id;
+
+        // Can't resume an agent without an ID or prompt
+        if (!agentId || !record.prompt) {
+          console.warn(`[agent-pool] Agent ${agentId} missing id/prompt — marking failed`);
+          await AgentModel.updateOne(
+            { _id: agentId },
+            { $set: { status: 'failed', completedAt: new Date() } },
+          );
+          continue;
+        }
+
+        // Track the branch so its worktree survives cleanup
+        if (record.branch) {
+          activeBranches.add(record.branch);
+        }
+
+        try {
+          await this.submit({
+            id: agentId,
+            type: record.type,
+            prompt: record.prompt,
+            cwd: record.worktreePath ?? process.cwd(),
+            taskId: record.taskId,
+            nodeId: record.nodeId ?? undefined,
+            parentAgentId: record.parentAgentId ?? undefined,
+            worktreePath: record.worktreePath ?? undefined,
+            branch: record.branch ?? undefined,
+            cliSessionId: record.cliSessionId ?? undefined,
+            timeoutMs: record.timeoutMs,
+            maxRestarts: record.maxRestarts,
+            systemPrompt: record.systemPrompt ?? undefined,
+            worktreeConfig:
+              record.worktreeType && record.worktreeIdentifier
+                ? { type: record.worktreeType, identifier: record.worktreeIdentifier }
+                : undefined,
+          });
+          console.log(`[agent-pool] Resumed agent ${agentId}`);
+        } catch (err) {
+          console.warn(`[agent-pool] Failed to resume agent ${agentId}:`, err);
+          await AgentModel.updateOne(
+            { _id: agentId },
+            { $set: { status: 'failed', completedAt: new Date() } },
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('[agent-pool] Failed to recover crashed agents:', err);
+    }
+
+    return activeBranches;
   }
 }
 

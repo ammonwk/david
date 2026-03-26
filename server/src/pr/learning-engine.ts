@@ -11,16 +11,7 @@ import type {
   BugReport,
 } from 'david-shared';
 
-// Lazy-load models to handle the case where DB might not be wired up yet
-let LearningRecordModel: any;
-let PullRequestModel: any;
-try {
-  const models = await import('../db/models.js');
-  LearningRecordModel = models.LearningRecordModel;
-  PullRequestModel = models.PullRequestModel;
-} catch {
-  console.warn('[LearningEngine] Could not import DB models — DB operations will be no-ops until models are available.');
-}
+import { LearningRecordModel, PullRequestModel } from '../db/models.js';
 
 /** Bug categories used for heuristic classification. */
 const BUG_CATEGORIES = [
@@ -102,18 +93,13 @@ export class LearningEngine {
     };
 
     // Persist to MongoDB
-    if (LearningRecordModel) {
-      try {
-        await LearningRecordModel.create(record);
-        console.log(
-          `[LearningEngine] Recorded outcome: category=${bugCategory} accepted=${wasAccepted} filePattern=${filePattern}`,
-        );
-      } catch (err) {
-        console.error('[LearningEngine] Failed to create learning record:', err);
-      }
-    } else {
-      // TODO: Persist when models are available
-      console.warn('[LearningEngine] DB models not available — learning record not persisted:', record);
+    try {
+      await LearningRecordModel.create(record);
+      console.log(
+        `[LearningEngine] Recorded outcome: category=${bugCategory} accepted=${wasAccepted} filePattern=${filePattern}`,
+      );
+    } catch (err) {
+      console.error('[LearningEngine] Failed to create learning record:', err);
     }
   }
 
@@ -140,8 +126,6 @@ export class LearningEngine {
       recentRejected: [],
       areaSpecificNotes: 'No learning data available yet.',
     };
-
-    if (!LearningRecordModel || !PullRequestModel) return defaultResult;
 
     try {
       const { nodeId, filePatterns } = params;
@@ -179,7 +163,7 @@ export class LearningEngine {
       }
 
       // Query matching learning records, sorted by recency
-      const records: LearningRecord[] = await LearningRecordModel
+      const records = await LearningRecordModel
         .find(filter)
         .sort({ createdAt: -1 })
         .limit(100)
@@ -262,11 +246,9 @@ export class LearningEngine {
       topPatterns: { accepted: [], rejected: [] },
     };
 
-    if (!LearningRecordModel) return emptyMetrics;
-
     try {
       // --- 1. Overall counts ---
-      const allRecords: LearningRecord[] = await LearningRecordModel.find().lean();
+      const allRecords = await LearningRecordModel.find().lean();
 
       if (allRecords.length === 0) return emptyMetrics;
 

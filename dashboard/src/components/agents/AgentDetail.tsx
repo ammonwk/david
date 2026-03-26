@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import type { AgentRecord } from 'david-shared';
 import {
   X,
@@ -10,6 +10,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { TerminalViewer } from './TerminalViewer';
+import { api } from '../../lib/api';
 
 interface AgentDetailProps {
   agent: AgentRecord;
@@ -34,6 +35,16 @@ function formatRuntime(seconds: number): string {
 export function AgentDetail({ agent, onClose, onStop }: AgentDetailProps) {
   const id = agent._id ?? agent.taskId;
   const isActive = agent.status === 'running' || agent.status === 'starting';
+
+  // Fetch PR URL for fix agents that have created PRs
+  const [prUrl, setPrUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (agent.type === 'fix' && agent.result?.prsCreated && agent.result.prsCreated > 0) {
+      api.getPRs({ agentId: id }).then(prs => {
+        if (prs.length > 0) setPrUrl(prs[0].prUrl);
+      }).catch(() => {});
+    }
+  }, [agent.type, agent.result?.prsCreated, id]);
 
   // Compute static runtime for completed agents
   const staticRuntime = useMemo(() => {
@@ -158,11 +169,13 @@ export function AgentDetail({ agent, onClose, onStop }: AgentDetailProps) {
             </ContextSection>
           )}
 
-          {/* PR link placeholder - shown when a fix agent has a result with PRs */}
-          {agent.type === 'fix' && agent.result?.prsCreated && agent.result.prsCreated > 0 && (
+          {/* PR link — shown when a fix agent has a result with PRs */}
+          {agent.type === 'fix' && agent.result?.prsCreated && agent.result.prsCreated > 0 && prUrl && (
             <ContextSection title="Pull Request">
               <a
-                href="#"
+                href={prUrl}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="flex items-center gap-1.5 text-xs text-blue-400 transition-colors hover:text-blue-300"
               >
                 <ExternalLink className="h-3 w-3" />

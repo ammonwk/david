@@ -285,21 +285,25 @@ function classifySeverity(level: string): 'error' | 'warn' | 'info' {
   return 'info';
 }
 
-export async function fetchLogHeatmap(
-  hours = 168,
-  severity: SeverityFilter = 'all',
-): Promise<LogHeatmapBucket[]> {
-  const safeHours = Math.min(Math.max(Math.floor(hours), 1), 24 * 30);
-  const now = Date.now();
-  const startTime = Math.floor((now - safeHours * 3600_000) / 1_000);
-  const endTime = Math.floor(now / 1_000);
-  const queryString = buildHeatmapQuery(severity);
-  const results = await runInsightsQuery(startTime, endTime, queryString);
+// ============================================
+// Heatmap Cache (in-memory, delta-aware)
+// ============================================
 
-  if (results.length === 0) {
-    return [];
-  }
+interface HeatmapCache {
+  buckets: LogHeatmapBucket[];
+  cachedAt: number; // ms timestamp
+  hours: number;
+  severity: SeverityFilter;
+}
 
+/** Return cached data if it's less than 5 minutes old. */
+const HEATMAP_CACHE_TTL_MS = 5 * 60_000;
+
+let heatmapCache: HeatmapCache | null = null;
+
+function parseHeatmapRows(
+  results: Array<Array<{ field?: string; value?: string }>>,
+): LogHeatmapBucket[] {
   const buckets = new Map<string, LogHeatmapBucket>();
 
   for (const row of results) {
@@ -329,17 +333,85 @@ export async function fetchLogHeatmap(
     if (existing) {
       existing.count += count;
     } else {
-      buckets.set(key, {
-        hour,
-        severity: severityKey,
-        count,
-      });
+      buckets.set(key, { hour, severity: severityKey, count });
     }
   }
 
-  return Array.from(buckets.values()).sort(
+  return Array.from(buckets.values());
+}
+
+export async function fetchLogHeatmap(
+  hours = 168,
+  severity: SeverityFilter = 'all',
+): Promise<LogHeatmapBucket[]> {
+  const safeHours = Math.min(Math.max(Math.floor(hours), 1), 24 * 30);
+  const now = Date.now();
+
+  // 1. Return cached data immediately if fresh and params match
+  if (
+    heatmapCache &&
+    heatmapCache.hours === safeHours &&
+    heatmapCache.severity === severity &&
+    now - heatmapCache.cachedAt < HEATMAP_CACHE_TTL_MS
+  ) {
+    return heatmapCache.buckets;
+  }
+
+  // 2. Determine whether we can do a delta fetch or need a full fetch
+  const canDelta =
+    heatmapCache &&
+    heatmapCache.hours === safeHours &&
+    heatmapCache.severity === severity;
+
+  let startTime: number;
+  let existingBuckets: Map<string, LogHeatmapBucket> | null = null;
+
+  if (canDelta) {
+    // Delta: re-query from 1 hour before last cache time so the in-progress
+    // hour bucket gets a fresh count.
+    startTime = Math.floor((heatmapCache!.cachedAt - 3600_000) / 1_000);
+    existingBuckets = new Map<string, LogHeatmapBucket>();
+    for (const b of heatmapCache!.buckets) {
+      existingBuckets.set(`${new Date(b.hour).toISOString()}:${b.severity}`, { ...b });
+    }
+  } else {
+    startTime = Math.floor((now - safeHours * 3600_000) / 1_000);
+  }
+
+  const endTime = Math.floor(now / 1_000);
+  const queryString = buildHeatmapQuery(severity);
+  const results = await runInsightsQuery(startTime, endTime, queryString);
+
+  // 3. Merge new results into the bucket map
+  const merged = existingBuckets ?? new Map<string, LogHeatmapBucket>();
+  const freshBuckets = parseHeatmapRows(results);
+
+  for (const b of freshBuckets) {
+    // Fresh data replaces cached data for overlapping hour/severity combos
+    merged.set(`${new Date(b.hour).toISOString()}:${b.severity}`, b);
+  }
+
+  // 4. Prune buckets that have fallen outside the requested window
+  const windowStart = now - safeHours * 3600_000;
+  for (const [key, bucket] of merged) {
+    if (new Date(bucket.hour).getTime() < windowStart) {
+      merged.delete(key);
+    }
+  }
+
+  const sorted = Array.from(merged.values()).sort(
     (a, b) => new Date(a.hour).getTime() - new Date(b.hour).getTime(),
   );
+
+  // 5. Update cache
+  heatmapCache = {
+    buckets: sorted,
+    cachedAt: now,
+    hours: safeHours,
+    severity,
+  };
+
+  return sorted;
 }
 
 // ============================================

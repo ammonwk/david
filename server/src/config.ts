@@ -64,7 +64,7 @@ export function createConfig(env: NodeJS.ProcessEnv) {
     geminiFlashModel: 'google/gemini-3.1-flash-lite-preview',
 
     // Agent pool
-    maxConcurrentAgents: parseInt(env.MAX_CONCURRENT_AGENTS || '30', 10),
+    maxConcurrentAgents: parseInt(env.MAX_CONCURRENT_AGENTS || '5', 10),
     agentTimeoutMs: parseInt(env.AGENT_TIMEOUT_MS || '3600000', 10),
     agentMaxRestarts: parseInt(env.AGENT_MAX_RESTARTS || '3', 10),
     agentRestartBackoffMs: [5000, 15000, 45000],

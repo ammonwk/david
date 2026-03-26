@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { PullRequestModel, BugReportModel } from '../db/models.js';
-// Will import learningEngine when available
 import type { LearningMetrics, PipelineItem, PipelineColumn } from 'david-shared';
 
 const router = Router();
@@ -11,6 +10,7 @@ router.get('/', async (req, res) => {
     const query: any = {};
     if (req.query.status) query.status = req.query.status;
     if (req.query.scanType) query.scanType = req.query.scanType;
+    if (req.query.agentId) query.agentId = req.query.agentId;
 
     const prs = await PullRequestModel.find(query)
       .sort({ createdAt: -1 })

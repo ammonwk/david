@@ -1,9 +1,8 @@
 import { execSync } from 'child_process';
 import { agentPool } from '../agents/agent-pool.js';
 import { buildAuditAgentPrompt } from '../agents/prompts.js';
-import { createWorktree } from '../agents/worktree-manager.js';
 import { socketManager } from '../ws/socket-manager.js';
-import { CodebaseTopologyModel, AgentModel, BugReportModel, PullRequestModel, SREStateModel } from '../db/models.js';
+import { CodebaseTopologyModel, BugReportModel, PullRequestModel, SREStateModel } from '../db/models.js';
 import { learningEngine } from '../pr/learning-engine.js';
 import { createPR, getPRDiff } from '../pr/pr-manager.js';
 import { config } from '../config.js';
@@ -47,6 +46,7 @@ export class AuditEngine {
     const topologySummary = this.formatTopologySummary(topology);
 
     // 3. For each L3 node, create and submit an audit agent
+    //    Worktrees are created lazily — only when the agent is dequeued and starts.
     const agentPromises = nodes.map(async (node) => {
       // Get learning context for this area
       const learning = await learningEngine.getLearningContext({
@@ -54,31 +54,24 @@ export class AuditEngine {
         filePatterns: node.files,
       });
 
-      // Create a worktree for this audit agent
-      // (audit agents need worktrees because their fix sub-agents will modify code)
       const bugId = `audit-${node.id}-${Date.now()}`;
-      const worktreeInfo = await createWorktree(bugId);
 
-      // Build the prompt
-      const prompt = buildAuditAgentPrompt({
-        node,
-        topologySummary,
-        sreState: JSON.stringify(sreState),
-        repoPath: worktreeInfo.path, // Agent works in its worktree
-        mongoUri: config.mongodbUri,
-        learning,
-      });
-
-      // Submit to agent pool
+      // Submit to agent pool with lazy worktree + deferred prompt
       return agentPool.submit({
         id: `agent-audit-${node.id}-${Date.now()}`,
         type: 'audit',
-        prompt,
-        cwd: worktreeInfo.path,
+        prompt: (repoPath: string) => buildAuditAgentPrompt({
+          node,
+          topologySummary,
+          sreState: JSON.stringify(sreState),
+          repoPath,
+          mongoUri: config.mongodbUri,
+          learning,
+        }),
+        cwd: process.cwd(), // placeholder — overridden by lazy worktree
         taskId: auditId,
         nodeId: node.id,
-        worktreePath: worktreeInfo.path,
-        branch: worktreeInfo.branch,
+        worktreeConfig: { identifier: bugId, type: 'branch' },
       });
     });
 
@@ -367,20 +360,8 @@ export class AuditEngine {
       }
     }
 
-    // 6. Persist the agent record to MongoDB
-    try {
-      const record = agent.toRecord();
-      await AgentModel.findOneAndUpdate(
-        { _id: record._id },
-        record,
-        { upsert: true },
-      );
-    } catch (err) {
-      console.error(
-        `[audit-engine] Failed to persist agent record ${agentId}:`,
-        err instanceof Error ? err.message : err,
-      );
-    }
+    // 6. Clean up the worktree (pool persists the agent record automatically)
+    await agent.cleanupWorktree();
 
     console.log(`[audit-engine] Finished processing agent ${agentId}`);
   }

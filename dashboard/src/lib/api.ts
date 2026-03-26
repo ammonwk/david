@@ -93,7 +93,7 @@ export const api = {
     request<void>(`/agents/${id}/stop`, { method: 'POST' }),
 
   // PRs
-  getPRs: (filters?: { status?: string; scanType?: string }) => {
+  getPRs: (filters?: { status?: string; scanType?: string; agentId?: string }) => {
     const params = new URLSearchParams(filters as Record<string, string>);
     return request<PullRequestRecord[]>(`/prs?${params}`);
   },

@@ -312,10 +312,13 @@ export const CodebaseTopologyModel = mongoose.model<
 // Agents
 // ============================================
 
-interface AgentRecordDocument extends Omit<AgentRecord, '_id'>, mongoose.Document {}
+interface AgentRecordDocument extends Omit<AgentRecord, '_id'>, mongoose.Document<string> {
+  _id: string;
+}
 
 const agentSchema = new Schema<AgentRecordDocument>(
   {
+    _id: { type: String, required: true },
     type: { type: String, enum: ['log-analysis', 'audit', 'verify', 'fix'], required: true },
     status: {
       type: String,
@@ -335,11 +338,16 @@ const agentSchema = new Schema<AgentRecordDocument>(
     timeoutMs: { type: Number, required: true },
     outputLog: { type: [String], default: [] },
     result: { type: AgentResultSchema },
+    prompt: { type: String },
+    systemPrompt: { type: String },
+    worktreeType: { type: String, enum: ['branch', 'snapshot'] },
+    worktreeIdentifier: { type: String },
   },
   { collection: 'agents', timestamps: true },
 );
 
 agentSchema.index({ status: 1, type: 1, parentAgentId: 1 });
+agentSchema.index({ createdAt: -1 });
 
 export const AgentModel = mongoose.model<AgentRecordDocument>('Agent', agentSchema);
 

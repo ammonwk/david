@@ -7,9 +7,6 @@ import { CodebaseMap } from './pages/CodebaseMap';
 import { AgentMonitor } from './pages/AgentMonitor';
 import { PRPipeline } from './pages/PRPipeline';
 
-// NOTE: Page components will be created by other agents.
-// For now, create simple placeholder exports that other agents will replace.
-
 export function App() {
   return (
     <BrowserRouter>

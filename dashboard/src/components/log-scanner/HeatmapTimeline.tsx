@@ -235,6 +235,9 @@ export function HeatmapTimeline({ scanHistory, heatmapData, onCellClick }: Heatm
     }
   }, [gridData]);
 
+  // Show loading skeleton while heatmap data hasn't arrived yet
+  const isLoading = heatmapData === undefined && scanHistory.length === 0;
+
   return (
     <div
       className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] p-4"
@@ -250,114 +253,127 @@ export function HeatmapTimeline({ scanHistory, heatmapData, onCellClick }: Heatm
         </span>
       </div>
 
-      <div
-        ref={scrollRef}
-        className="overflow-x-auto"
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-      >
-        <svg
-          width={svgWidth}
-          height={svgHeight}
-          viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-          style={{ display: 'block', minWidth: svgWidth }}
-        >
-          {/* Row labels */}
-          {SEVERITY_ROWS.map(({ key, label }, rowIdx) => (
-            <text
-              key={key}
-              x={LABEL_WIDTH - 6}
-              y={rowIdx * (CELL_SIZE + CELL_GAP) + CELL_SIZE / 2 + 4}
-              textAnchor="end"
-              className="fill-[var(--text-muted)]"
-              style={{ fontSize: 10, fontFamily: 'inherit' }}
-            >
-              {label}
-            </text>
+      {isLoading ? (
+        <div className="space-y-1.5">
+          {SEVERITY_ROWS.map(({ key, label }) => (
+            <div key={key} className="flex items-center gap-2">
+              <span className="w-10 text-right text-[10px] text-[var(--text-muted)]">{label}</span>
+              <div className="h-3.5 flex-1 animate-pulse rounded bg-[var(--bg-tertiary)]" />
+            </div>
           ))}
-
-          {/* Heatmap cells */}
-          {gridData.map((row, rowIdx) =>
-            row.map((cell, colIdx) => (
-              <rect
-                key={`${rowIdx}-${colIdx}`}
-                x={LABEL_WIDTH + colIdx * (CELL_SIZE + CELL_GAP)}
-                y={rowIdx * (CELL_SIZE + CELL_GAP)}
-                width={CELL_SIZE}
-                height={CELL_SIZE}
-                rx={2}
-                ry={2}
-                fill={cellColor(cell.severity, cell.count, maxCount)}
-                style={{
-                  cursor: 'pointer',
-                  transition: 'fill 150ms ease, opacity 150ms ease',
-                }}
-                onMouseEnter={(e) => handleMouseEnter(cell, e)}
-                onClick={() => handleCellClick(cell)}
-              >
-                <title />
-              </rect>
-            )),
-          )}
-
-          {/* Day separator lines & labels */}
-          {dayMarkers.map(({ index, label }) => {
-            const x = LABEL_WIDTH + index * (CELL_SIZE + CELL_GAP);
-            return (
-              <g key={index}>
-                <line
-                  x1={x}
-                  y1={0}
-                  x2={x}
-                  y2={gridHeight}
-                  stroke="var(--border-color)"
-                  strokeWidth={1}
-                  strokeDasharray="2,2"
-                  opacity={0.5}
-                />
+        </div>
+      ) : (
+        <>
+          <div
+            ref={scrollRef}
+            className="overflow-x-auto"
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          >
+            <svg
+              width={svgWidth}
+              height={svgHeight}
+              viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+              style={{ display: 'block', minWidth: svgWidth }}
+            >
+              {/* Row labels */}
+              {SEVERITY_ROWS.map(({ key, label }, rowIdx) => (
                 <text
-                  x={x + 2}
-                  y={gridHeight + 14}
+                  key={key}
+                  x={LABEL_WIDTH - 6}
+                  y={rowIdx * (CELL_SIZE + CELL_GAP) + CELL_SIZE / 2 + 4}
+                  textAnchor="end"
                   className="fill-[var(--text-muted)]"
-                  style={{ fontSize: 9, fontFamily: 'inherit' }}
+                  style={{ fontSize: 10, fontFamily: 'inherit' }}
                 >
                   {label}
                 </text>
-              </g>
-            );
-          })}
-        </svg>
-      </div>
+              ))}
 
-      {/* Tooltip */}
-      {tooltip.visible && tooltip.cell && (
-        <div
-          className="pointer-events-none absolute z-50 rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)] px-3 py-2 shadow-lg"
-          style={{
-            left: tooltip.x,
-            top: tooltip.y,
-            transform: 'translate(-50%, -100%)',
-          }}
-        >
-          <div className="text-[10px] font-medium text-[var(--text-primary)]">
-            {formatDayLabel(tooltip.cell.hour)}{' '}
-            {formatHourLabel(tooltip.cell.hour)}
+              {/* Heatmap cells */}
+              {gridData.map((row, rowIdx) =>
+                row.map((cell, colIdx) => (
+                  <rect
+                    key={`${rowIdx}-${colIdx}`}
+                    x={LABEL_WIDTH + colIdx * (CELL_SIZE + CELL_GAP)}
+                    y={rowIdx * (CELL_SIZE + CELL_GAP)}
+                    width={CELL_SIZE}
+                    height={CELL_SIZE}
+                    rx={2}
+                    ry={2}
+                    fill={cellColor(cell.severity, cell.count, maxCount)}
+                    style={{
+                      cursor: 'pointer',
+                      transition: 'fill 150ms ease, opacity 150ms ease',
+                    }}
+                    onMouseEnter={(e) => handleMouseEnter(cell, e)}
+                    onClick={() => handleCellClick(cell)}
+                  >
+                    <title />
+                  </rect>
+                )),
+              )}
+
+              {/* Day separator lines & labels */}
+              {dayMarkers.map(({ index, label }) => {
+                const x = LABEL_WIDTH + index * (CELL_SIZE + CELL_GAP);
+                return (
+                  <g key={index}>
+                    <line
+                      x1={x}
+                      y1={0}
+                      x2={x}
+                      y2={gridHeight}
+                      stroke="var(--border-color)"
+                      strokeWidth={1}
+                      strokeDasharray="2,2"
+                      opacity={0.5}
+                    />
+                    <text
+                      x={x + 2}
+                      y={gridHeight + 14}
+                      className="fill-[var(--text-muted)]"
+                      style={{ fontSize: 9, fontFamily: 'inherit' }}
+                    >
+                      {label}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
           </div>
-          <div className="mt-0.5 flex items-center gap-1.5">
-            <span
-              className="inline-block h-2 w-2 rounded-sm"
+
+          {/* Tooltip */}
+          {tooltip.visible && tooltip.cell && (
+            <div
+              className="pointer-events-none absolute z-50 rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)] px-3 py-2 shadow-lg"
               style={{
-                backgroundColor: `rgb(${SEVERITY_COLORS[tooltip.cell.severity].r}, ${SEVERITY_COLORS[tooltip.cell.severity].g}, ${SEVERITY_COLORS[tooltip.cell.severity].b})`,
+                left: tooltip.x,
+                top: tooltip.y,
+                transform: 'translate(-50%, -100%)',
               }}
-            />
-            <span className="text-[10px] text-[var(--text-secondary)]">
-              {tooltip.cell.severity}:
-            </span>
-            <span className="text-[10px] font-semibold text-[var(--text-primary)] tabular-nums">
-              {tooltip.cell.count.toLocaleString()}
-            </span>
-          </div>
-        </div>
+            >
+              <div className="text-[10px] font-medium text-[var(--text-primary)]">
+                {formatDayLabel(tooltip.cell.hour)}{' '}
+                {formatHourLabel(tooltip.cell.hour)}
+              </div>
+              <div className="mt-0.5 flex items-center gap-1.5">
+                <span
+                  className="inline-block h-2 w-2 rounded-sm"
+                  style={{
+                    backgroundColor: `rgb(${SEVERITY_COLORS[tooltip.cell.severity].r}, ${SEVERITY_COLORS[tooltip.cell.severity].g}, ${SEVERITY_COLORS[tooltip.cell.severity].b})`,
+                  }}
+                />
+                <span className="text-[10px] text-[var(--text-secondary)]">
+                  {tooltip.cell.severity}:
+                </span>
+                <span className="text-[10px] font-semibold text-[var(--text-primary)] tabular-nums">
+                  {tooltip.cell.count.toLocaleString()}
+                </span>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
