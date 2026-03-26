@@ -14,7 +14,12 @@ import {
   GitMerge,
   TrendingUp,
 } from 'lucide-react';
-import type { OverviewStats } from 'david-shared';
+import type {
+  OverviewStats,
+  HealthVitals as HealthVitalsData,
+  VitalsTimeframe,
+  VitalsPoint,
+} from 'david-shared';
 import { api } from '../../lib/api';
 
 // ── Color Constants ──────────────────────────────────────────────────────────
@@ -29,6 +34,34 @@ const AMBER = '#f59e0b';
 const AMBER_LIGHT = '#fbbf24';
 const GREEN = '#10b981';
 const GREEN_LIGHT = '#34d399';
+
+// ── Timeframe Config ─────────────────────────────────────────────────────────
+
+const TIMEFRAMES: VitalsTimeframe[] = ['5m', '60m', '24h', '1w'];
+
+const POLL_INTERVALS: Record<VitalsTimeframe, number> = {
+  '5m': 15_000,
+  '60m': 30_000,
+  '24h': 60_000,
+  '1w': 120_000,
+};
+
+function formatLabel(timestamp: string, timeframe: VitalsTimeframe): string {
+  const d = new Date(timestamp);
+  switch (timeframe) {
+    case '5m':
+    case '60m':
+      return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    case '24h':
+      return d.toLocaleTimeString(undefined, { hour: 'numeric' });
+    case '1w':
+      return d.toLocaleDateString(undefined, { weekday: 'short' });
+  }
+}
+
+function toChartData(points: VitalsPoint[], timeframe: VitalsTimeframe) {
+  return points.map(p => ({ label: formatLabel(p.timestamp, timeframe), value: p.value }));
+}
 
 // ── Animated Number ──────────────────────────────────────────────────────────
 
@@ -45,7 +78,6 @@ function useAnimatedValue(target: number, duration = 500): number {
     const step = (now: number) => {
       const elapsed = now - startRef.current.time;
       const progress = Math.min(elapsed / duration, 1);
-      // Spring-like ease out
       const eased = 1 - Math.pow(1 - progress, 3);
       const current = Math.round(startRef.current.value + (target - startRef.current.value) * eased);
       setDisplay(current);
@@ -201,60 +233,15 @@ function StatItem({ icon: Icon, label, value, suffix, colorClass }: StatItemProp
   );
 }
 
-// ── Synthetic Data Generation ────────────────────────────────────────────────
-// When the API only returns current counters (not time-series), we build
-// plausible chart data around the single known value so the UI is not empty.
-
-function generateTimeSeries(
-  hours: number,
-  latestValue: number,
-  variance: number,
-): Array<{ label: string; value: number }> {
-  const now = new Date();
-  const points: Array<{ label: string; value: number }> = [];
-  for (let i = hours; i >= 0; i--) {
-    const t = new Date(now.getTime() - i * 3600_000);
-    const label = t.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-    // Walk towards the latest value with some noise
-    const progress = (hours - i) / hours;
-    const base = latestValue * (0.5 + 0.5 * progress);
-    const noise = (Math.random() - 0.5) * variance;
-    points.push({ label, value: Math.max(0, Math.round(base + noise)) });
-  }
-  // Ensure the last point matches the actual latest value
-  if (points.length > 0) {
-    points[points.length - 1].value = latestValue;
-  }
-  return points;
-}
-
-function generateWeeklySeries(
-  days: number,
-  latestValue: number,
-  variance: number,
-): Array<{ label: string; value: number }> {
-  const now = new Date();
-  const points: Array<{ label: string; value: number }> = [];
-  for (let i = days; i >= 0; i--) {
-    const t = new Date(now.getTime() - i * 86_400_000);
-    const label = t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    const progress = (days - i) / days;
-    const base = latestValue * (0.7 + 0.3 * progress);
-    const noise = (Math.random() - 0.5) * variance;
-    points.push({ label, value: Math.max(0, Math.round(base + noise)) });
-  }
-  if (points.length > 0) {
-    points[points.length - 1].value = latestValue;
-  }
-  return points;
-}
-
 // ── Main Component ───────────────────────────────────────────────────────────
 
 export function HealthVitals() {
   const [stats, setStats] = useState<OverviewStats | null>(null);
+  const [vitals, setVitals] = useState<HealthVitalsData | null>(null);
+  const [timeframe, setTimeframe] = useState<VitalsTimeframe>('24h');
   const [loading, setLoading] = useState(true);
 
+  // Fetch overview stats for the stat grid
   const fetchStats = useCallback(async () => {
     try {
       const data = await api.getOverviewStats();
@@ -266,31 +253,44 @@ export function HealthVitals() {
     }
   }, []);
 
+  // Fetch vitals time-series
+  const fetchVitals = useCallback(async () => {
+    try {
+      const data = await api.getHealthVitals(timeframe);
+      setVitals(data);
+    } catch {
+      // Silently retry on next interval
+    }
+  }, [timeframe]);
+
+  // Poll overview stats every 30s
   useEffect(() => {
     fetchStats();
     const interval = setInterval(fetchStats, 30_000);
     return () => clearInterval(interval);
   }, [fetchStats]);
 
-  // Generate chart data from stats (memoized so it doesn't regenerate every render)
+  // Poll vitals with timeframe-dependent interval
+  useEffect(() => {
+    fetchVitals();
+    const interval = setInterval(fetchVitals, POLL_INTERVALS[timeframe]);
+    return () => clearInterval(interval);
+  }, [fetchVitals, timeframe]);
+
+  // Format vitals data for charts
   const chartData = useMemo(() => {
-    if (!stats) return null;
+    if (!vitals) return null;
+    const tf = vitals.timeframe;
     return {
-      errorRate: generateTimeSeries(24, stats.bugsFoundToday, 3),
-      agentThroughput: generateTimeSeries(24, stats.activeAgents + stats.queuedAgents, 4),
-      queueDepth: generateTimeSeries(24, stats.queuedAgents, 2),
-      prAcceptance: generateWeeklySeries(7, stats.prsAcceptedThisWeek, 2),
+      errorRate: toChartData(vitals.errorRate, tf),
+      agentThroughput: toChartData(vitals.agentThroughput, tf),
+      queueDepth: toChartData(vitals.queueDepth, tf),
+      prAcceptance: toChartData(vitals.prAcceptance, tf),
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    stats?.bugsFoundToday,
-    stats?.activeAgents,
-    stats?.queuedAgents,
-    stats?.prsAcceptedThisWeek,
-  ]);
+  }, [vitals]);
 
   const handleChartClick = useCallback(() => {
-    // Stub: future feature will expand chart to full detail view
+    // Future: expand chart to full detail view
   }, []);
 
   // Acceptance rate calculation
@@ -322,28 +322,44 @@ export function HealthVitals() {
 
   return (
     <div className="flex h-full flex-col gap-3">
-      {/* Header */}
-      <h2 className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
-        <Activity className="h-4 w-4 text-[var(--accent-blue)]" strokeWidth={2} />
-        Health Vitals
-      </h2>
+      {/* Header + timeframe selector */}
+      <div className="flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-[var(--text-primary)]">
+          <Activity className="h-4 w-4 text-[var(--accent-blue)]" strokeWidth={2} />
+          Health Vitals
+        </h2>
+        <div className="flex gap-0.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-tertiary)] p-0.5">
+          {TIMEFRAMES.map(tf => (
+            <button
+              key={tf}
+              onClick={() => setTimeframe(tf)}
+              className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                timeframe === tf
+                  ? 'bg-[var(--accent-blue)] text-white'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+              }`}
+            >
+              {tf}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* Mini charts */}
       <div className="flex-1 space-y-2 overflow-y-auto">
         {chartData && (
           <>
             <MiniChart
-              title="Error Rate (24h)"
+              title={`Error Rate (${timeframe})`}
               data={chartData.errorRate}
               color={RED}
               colorLight={RED_LIGHT}
               gradientId="cc-grad-error"
-              thresholdValue={stats?.bugsFoundToday ? Math.ceil(stats.bugsFoundToday * 1.5) : 5}
-              thresholdLabel="Baseline"
+              thresholdValue={stats?.bugsFoundToday ? Math.ceil(stats.bugsFoundToday * 1.5) : undefined}
               onClick={handleChartClick}
             />
             <MiniChart
-              title="Agent Throughput (24h)"
+              title={`Agent Throughput (${timeframe})`}
               data={chartData.agentThroughput}
               color={BLUE}
               colorLight={BLUE_LIGHT}
@@ -351,7 +367,7 @@ export function HealthVitals() {
               onClick={handleChartClick}
             />
             <MiniChart
-              title="Queue Depth (24h)"
+              title={`Queue Depth (${timeframe})`}
               data={chartData.queueDepth}
               color={AMBER}
               colorLight={AMBER_LIGHT}
@@ -359,7 +375,7 @@ export function HealthVitals() {
               onClick={handleChartClick}
             />
             <MiniChart
-              title="PR Acceptance (7d)"
+              title={`PR Acceptance (${timeframe})`}
               data={chartData.prAcceptance}
               color={GREEN}
               colorLight={GREEN_LIGHT}

@@ -35,7 +35,7 @@ claude --print --output-format stream-json --verbose --dangerously-skip-permissi
 
 ### Codex args
 ```
-codex exec --json --full-auto -
+codex exec --json --yolo -
 ```
 
 Key mappings:
@@ -44,7 +44,7 @@ Key mappings:
 | Binary | `config.claudeBinary` | `config.codexBinary` |
 | One-shot mode | `--print` | `exec` subcommand |
 | Streaming JSON | `--output-format stream-json` | `--json` |
-| Bypass permissions | `--dangerously-skip-permissions` | `--full-auto` (or `--yolo` for full filesystem access) |
+| Bypass permissions | `--dangerously-skip-permissions` | `--yolo` |
 | Prompt via stdin | `-p -` | `-` (positional arg to `exec`) |
 | Resume session | `--resume <id>` | `exec resume <id>` |
 | System prompt | `--system-prompt <text>` | TBD — may need `--config` or profile |

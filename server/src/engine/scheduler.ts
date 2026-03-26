@@ -67,7 +67,7 @@ export function timeSpanToCron(timeSpan: ScanTimeSpan): string {
  * Supports: literal values, ranges (1-5), steps (* /n), comma-separated lists.
  * Does NOT support non-standard 6-field (seconds) expressions.
  */
-function calculateNextCronRun(cronExpression: string, after?: Date): Date | null {
+export function calculateNextCronRun(cronExpression: string, after?: Date): Date | null {
   try {
     const fields = cronExpression.trim().split(/\s+/);
     if (fields.length !== 5) return null;

@@ -256,7 +256,7 @@ export class CodebaseMapper {
     const prompt = buildL1DiscoveryPrompt(treeText);
     const result = await completeWithGeminiPro(
       [{ role: 'user', content: prompt }],
-      { temperature: 0.2, maxTokens: 8192 },
+      { temperature: 0.2 },
     );
 
     const groups = this.parseJSONResponse<L1Group[]>(result.content);
@@ -304,7 +304,7 @@ export class CodebaseMapper {
     const prompt = buildL2DiscoveryPrompt(l1Group.name, l1Group.description, fileList);
     const result = await completeWithGeminiFlash(
       [{ role: 'user', content: prompt }],
-      { temperature: 0.2, maxTokens: 4096 },
+      { temperature: 0.2 },
     );
 
     const groups = this.parseJSONResponse<L2Group[]>(result.content);
@@ -362,7 +362,7 @@ export class CodebaseMapper {
     const prompt = buildL3DiscoveryPrompt(l2Node.name, l2Node.description, fileListWithPreviews);
     const result = await completeWithGeminiFlash(
       [{ role: 'user', content: prompt }],
-      { temperature: 0.2, maxTokens: 4096 },
+      { temperature: 0.2 },
     );
 
     const groups = this.parseJSONResponse<L3Group[]>(result.content);

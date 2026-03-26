@@ -34,6 +34,16 @@ export interface ManagedAgentOptions {
   env?: Record<string, string>;
 }
 
+export interface ManagedAgentServices {
+  launchCLI?: (options: {
+    prompt: string;
+    cwd: string;
+    sessionId?: string;
+    systemPrompt?: string;
+    env?: Record<string, string>;
+  }) => any | Promise<any>;
+}
+
 /** Maximum number of output lines kept in memory. */
 const OUTPUT_LOG_MAX_LINES = 500;
 
@@ -83,8 +93,10 @@ export class ManagedAgent extends EventEmitter {
   private env?: Record<string, string>;
   /** True while a restart attempt is in progress (backoff + relaunch). */
   private restarting: boolean = false;
+  private services: ManagedAgentServices;
+  private static readonly TOOL_OUTPUT_MAX = 180;
 
-  constructor(options: ManagedAgentOptions) {
+  constructor(options: ManagedAgentOptions, services: ManagedAgentServices = {}) {
     super();
 
     this.id = options.id;
@@ -100,6 +112,7 @@ export class ManagedAgent extends EventEmitter {
     this.maxRestarts = options.maxRestarts ?? config.agentMaxRestarts;
     this.systemPrompt = options.systemPrompt;
     this.env = options.env;
+    this.services = services;
   }
 
   // ============================================
@@ -181,9 +194,7 @@ export class ManagedAgent extends EventEmitter {
    * continue from where it left off.
    */
   private async launchProcess(): Promise<void> {
-    // Dynamic import so the module can be loaded even when cli-launcher is
-    // not yet compiled (the import is resolved at runtime, not at type-check).
-    const { launchCLI } = await import('./cli-launcher.js');
+    const launchCLI = this.services.launchCLI ?? await this.loadLaunchCLI();
 
     this.process = await launchCLI({
       prompt: this.prompt,
@@ -200,16 +211,11 @@ export class ManagedAgent extends EventEmitter {
     });
 
     this.process.on('text', (line: string) => {
-      this.appendOutput(line);
-      this.emit('output', line);
+      this.pushOutput(line);
     });
 
-    this.process.on('message', (msg: unknown) => {
-      // Messages are NDJSON objects from the CLI.  We simply log them as
-      // serialised strings so the dashboard output viewer can display them.
-      const serialised = typeof msg === 'string' ? msg : JSON.stringify(msg);
-      this.appendOutput(serialised);
-      this.emit('output', serialised);
+    this.process.on('tool_use', (name: string, input: unknown) => {
+      this.pushOutput(this.formatToolUse(name, input));
     });
 
     this.process.on('result', (raw: unknown) => {
@@ -224,7 +230,7 @@ export class ManagedAgent extends EventEmitter {
     });
 
     this.process.on('error', (err: Error) => {
-      this.appendOutput(`[error] ${err.message}`);
+      this.pushOutput(`[error] ${err.message}`);
       this.emit('error', err);
       // Do not transition status here — wait for the 'exit' event to decide
       // whether to restart or fail.
@@ -415,6 +421,12 @@ export class ManagedAgent extends EventEmitter {
     }
   }
 
+  /** Append output and notify pool/dashboard subscribers. */
+  private pushOutput(line: string): void {
+    this.appendOutput(line);
+    this.emit('output', line);
+  }
+
   // ============================================
   // Result parsing
   // ============================================
@@ -513,6 +525,45 @@ export class ManagedAgent extends EventEmitter {
     return null;
   }
 
+  private formatToolUse(name: string, input: unknown): string {
+    if (input && typeof input === 'object') {
+      const record = input as Record<string, unknown>;
+      const statusBits: string[] = [];
+
+      if (typeof record.status === 'string' && record.status !== 'in_progress') {
+        statusBits.push(record.status);
+      }
+      if (typeof record.exit_code === 'number' || typeof record.exit_code === 'string') {
+        statusBits.push(`exit ${record.exit_code}`);
+      }
+
+      const statusSuffix = statusBits.length > 0 ? ` (${statusBits.join(', ')})` : '';
+
+      if (typeof record.command === 'string' && record.command.trim()) {
+        return `$ ${this.truncate(this.squashWhitespace(record.command), ManagedAgent.TOOL_OUTPUT_MAX)}${statusSuffix}`;
+      }
+
+      if (typeof record.path === 'string' && record.path.trim()) {
+        return `Tool: ${name} ${this.truncate(record.path, ManagedAgent.TOOL_OUTPUT_MAX)}${statusSuffix}`;
+      }
+
+      if (Array.isArray(record.changes)) {
+        return `Tool: ${name} ${record.changes.length} change(s)${statusSuffix}`;
+      }
+
+      if (typeof record.text === 'string' && record.text.trim()) {
+        return `Tool: ${name} ${this.truncate(this.squashWhitespace(record.text), ManagedAgent.TOOL_OUTPUT_MAX)}${statusSuffix}`;
+      }
+
+      const compact = this.compactJSON(record);
+      if (compact !== '{}') {
+        return `Tool: ${name} ${this.truncate(compact, ManagedAgent.TOOL_OUTPUT_MAX)}${statusSuffix}`;
+      }
+    }
+
+    return `Tool: ${name}`;
+  }
+
   // ============================================
   // Status transitions
   // ============================================
@@ -560,5 +611,30 @@ export class ManagedAgent extends EventEmitter {
   /** Promise-based delay. */
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private compactJSON(value: unknown): string {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  private squashWhitespace(value: string): string {
+    return value.replace(/\s+/g, ' ').trim();
+  }
+
+  private truncate(value: string, max: number): string {
+    if (value.length <= max) {
+      return value;
+    }
+
+    return `${value.slice(0, max - 1)}…`;
+  }
+
+  private async loadLaunchCLI(): Promise<NonNullable<ManagedAgentServices['launchCLI']>> {
+    const { launchCLI } = await import('./cli-launcher.js');
+    return launchCLI;
   }
 }

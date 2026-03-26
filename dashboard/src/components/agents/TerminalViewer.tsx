@@ -2,29 +2,11 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Copy, Check, ArrowDown } from 'lucide-react';
 import { useAgentOutput } from '../../hooks/useSocket';
 import { api } from '../../lib/api';
+import { getLineClasses, getLineLabel, normalizeAgentOutput } from './terminalOutput';
 
 interface TerminalViewerProps {
   agentId: string;
   isActive: boolean;
-}
-
-/** Classify a line for syntax coloring. */
-function classifyLine(line: string): string {
-  const trimmed = line.trimStart();
-  // Tool use / command lines
-  if (trimmed.startsWith('$') || trimmed.startsWith('>') || trimmed.startsWith('Tool:'))
-    return 'text-emerald-400 font-medium';
-  // Errors
-  if (/^error/i.test(trimmed) || /\bERROR\b/.test(trimmed) || /\bfailed\b/i.test(trimmed))
-    return 'text-red-400';
-  // Warnings
-  if (/\bwarn(ing)?\b/i.test(trimmed))
-    return 'text-amber-400';
-  // JSON blobs
-  if (trimmed.startsWith('{') || trimmed.startsWith('['))
-    return 'text-sky-300';
-
-  return 'text-slate-300';
 }
 
 /**
@@ -50,6 +32,7 @@ export function TerminalViewer({ agentId, isActive }: TerminalViewerProps) {
   }, [agentId]);
 
   const allLines = [...historicalLines, ...liveLines];
+  const displayLines = normalizeAgentOutput(allLines);
 
   // Auto-scroll
   useEffect(() => {
@@ -103,14 +86,24 @@ export function TerminalViewer({ agentId, isActive }: TerminalViewerProps) {
         className="flex-1 overflow-y-auto px-3 py-2 font-mono text-[12px] leading-[1.6]"
         style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace" }}
       >
-        {allLines.length === 0 ? (
+        {displayLines.length === 0 ? (
           <div className="flex items-center justify-center py-8 text-xs text-slate-600">
             {isActive ? 'Waiting for output...' : 'No output recorded.'}
           </div>
         ) : (
-          allLines.map((line, i) => (
-            <div key={i} className={`whitespace-pre-wrap break-all ${classifyLine(line)}`}>
-              {line}
+          displayLines.map((line, i) => (
+            <div
+              key={i}
+              className={`mb-1 flex gap-2 rounded-md px-2 py-1 ${getLineClasses(line.kind)}`}
+            >
+              {getLineLabel(line.kind) && (
+                <span className="mt-0.5 shrink-0 text-[9px] font-semibold uppercase tracking-[0.18em] text-inherit/70">
+                  {getLineLabel(line.kind)}
+                </span>
+              )}
+              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+                {line.text || ' '}
+              </span>
             </div>
           ))
         )}

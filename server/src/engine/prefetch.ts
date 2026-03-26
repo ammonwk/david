@@ -21,6 +21,7 @@ import type {
   ScanTimeSpan,
   SeverityFilter,
   LogPattern,
+  LogHeatmapBucket,
   ECSMetrics,
   ECSEvent,
 } from 'david-shared';
@@ -88,9 +89,78 @@ function buildQuery(severity: SeverityFilter): string {
   }
 }
 
+/** Build a CloudWatch Insights query that returns hourly severity counts. */
+function buildHeatmapQuery(severity: SeverityFilter): string {
+  const base = 'fields @timestamp, level';
+  const stats = 'stats count(*) as count by bin(1h) as bucket, level | sort bucket asc';
+
+  switch (severity) {
+    case 'warn-error':
+      return `${base} | filter level in ("warn", "warning", "error", "critical", "fatal") | ${stats}`;
+    case 'error':
+      return `${base} | filter level in ("error", "critical", "fatal") | ${stats}`;
+    case 'all':
+    default:
+      return `${base} | ${stats}`;
+  }
+}
+
 /** Sleep for the given number of milliseconds. */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runInsightsQuery(
+  startTime: number,
+  endTime: number,
+  queryString: string,
+): Promise<Array<Array<{ field?: string; value?: string }>>> {
+  let queryId: string;
+  try {
+    const startResult = await logsClient.send(
+      new StartQueryCommand({
+        logGroupName: config.cloudwatchLogGroup,
+        startTime,
+        endTime,
+        queryString,
+      }),
+    );
+    if (!startResult.queryId) {
+      console.warn('[prefetch] StartQuery returned no queryId');
+      return [];
+    }
+    queryId = startResult.queryId;
+  } catch (err) {
+    console.warn('[prefetch] Failed to start CloudWatch Insights query:', err);
+    return [];
+  }
+
+  const deadline = Date.now() + QUERY_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    await sleep(QUERY_POLL_INTERVAL_MS);
+    try {
+      const poll = await logsClient.send(
+        new GetQueryResultsCommand({ queryId }),
+      );
+      const status = poll.status;
+
+      if (status === 'Failed' || status === 'Cancelled' || status === 'Timeout') {
+        console.warn(`[prefetch] CloudWatch Insights query ${status}`);
+        return [];
+      }
+
+      if (status === 'Complete') {
+        return (poll.results ?? []) as Array<Array<{ field?: string; value?: string }>>;
+      }
+    } catch (err) {
+      console.warn('[prefetch] Error polling CloudWatch Insights query:', err);
+      return [];
+    }
+  }
+
+  console.warn('[prefetch] CloudWatch Insights query timed out');
+  return [];
 }
 
 /**
@@ -141,55 +211,7 @@ export async function fetchLogs(
   const startTime = Math.floor((now - timeSpanToMs(timeSpan)) / 1_000);
   const endTime = Math.floor(now / 1_000);
   const queryString = buildQuery(severity);
-
-  // 1. Start the Insights query
-  let queryId: string;
-  try {
-    const startResult = await logsClient.send(
-      new StartQueryCommand({
-        logGroupName: config.cloudwatchLogGroup,
-        startTime,
-        endTime,
-        queryString,
-      }),
-    );
-    if (!startResult.queryId) {
-      console.warn('[prefetch] StartQuery returned no queryId');
-      return { patterns: [], rawEvents: [] };
-    }
-    queryId = startResult.queryId;
-  } catch (err) {
-    console.warn('[prefetch] Failed to start CloudWatch Insights query:', err);
-    return { patterns: [], rawEvents: [] };
-  }
-
-  // 2. Poll until Complete or Failed (timeout after 60 s)
-  const deadline = Date.now() + QUERY_TIMEOUT_MS;
-  let results: Array<Array<{ field?: string; value?: string }>> = [];
-
-  while (Date.now() < deadline) {
-    await sleep(QUERY_POLL_INTERVAL_MS);
-    try {
-      const poll = await logsClient.send(
-        new GetQueryResultsCommand({ queryId }),
-      );
-      const status = poll.status;
-
-      if (status === 'Failed' || status === 'Cancelled' || status === 'Timeout') {
-        console.warn(`[prefetch] CloudWatch Insights query ${status}`);
-        return { patterns: [], rawEvents: [] };
-      }
-
-      if (status === 'Complete') {
-        results = (poll.results ?? []) as Array<Array<{ field?: string; value?: string }>>;
-        break;
-      }
-      // Still running — loop again
-    } catch (err) {
-      console.warn('[prefetch] Error polling CloudWatch Insights query:', err);
-      return { patterns: [], rawEvents: [] };
-    }
-  }
+  const results = await runInsightsQuery(startTime, endTime, queryString);
 
   if (results.length === 0) {
     return { patterns: [], rawEvents: [] };
@@ -250,6 +272,74 @@ export async function fetchLogs(
   );
 
   return { patterns, rawEvents };
+}
+
+function classifySeverity(level: string): 'error' | 'warn' | 'info' {
+  const normalized = level.toLowerCase();
+  if (normalized === 'error' || normalized === 'critical' || normalized === 'fatal') {
+    return 'error';
+  }
+  if (normalized === 'warn' || normalized === 'warning') {
+    return 'warn';
+  }
+  return 'info';
+}
+
+export async function fetchLogHeatmap(
+  hours = 168,
+  severity: SeverityFilter = 'all',
+): Promise<LogHeatmapBucket[]> {
+  const safeHours = Math.min(Math.max(Math.floor(hours), 1), 24 * 30);
+  const now = Date.now();
+  const startTime = Math.floor((now - safeHours * 3600_000) / 1_000);
+  const endTime = Math.floor(now / 1_000);
+  const queryString = buildHeatmapQuery(severity);
+  const results = await runInsightsQuery(startTime, endTime, queryString);
+
+  if (results.length === 0) {
+    return [];
+  }
+
+  const buckets = new Map<string, LogHeatmapBucket>();
+
+  for (const row of results) {
+    const fieldMap = new Map<string, string>();
+    for (const cell of row) {
+      if (cell.field && cell.value !== undefined) {
+        fieldMap.set(cell.field, cell.value);
+      }
+    }
+
+    const bucketValue =
+      fieldMap.get('bucket') ??
+      fieldMap.get('bin(1h)') ??
+      fieldMap.get('@timestamp');
+
+    if (!bucketValue) continue;
+
+    const hour = new Date(bucketValue);
+    if (Number.isNaN(hour.getTime())) continue;
+
+    const severityKey = classifySeverity(fieldMap.get('level') ?? 'info');
+    const count = parseInt(fieldMap.get('count') ?? '0', 10);
+    if (!Number.isFinite(count) || count <= 0) continue;
+
+    const key = `${hour.toISOString()}:${severityKey}`;
+    const existing = buckets.get(key);
+    if (existing) {
+      existing.count += count;
+    } else {
+      buckets.set(key, {
+        hour,
+        severity: severityKey,
+        count,
+      });
+    }
+  }
+
+  return Array.from(buckets.values()).sort(
+    (a, b) => new Date(a.hour).getTime() - new Date(b.hour).getTime(),
+  );
 }
 
 // ============================================

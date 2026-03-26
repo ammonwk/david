@@ -13,7 +13,9 @@ import type {
   UpdateScheduleRequest,
   OverviewStats,
   PipelineItem,
+  LogHeatmapBucket,
   HealthVitals,
+  VitalsTimeframe,
   RuntimeSettings,
   UpdateRuntimeSettingsRequest,
 } from 'david-shared';
@@ -25,7 +27,26 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
-  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+
+  if (!res.ok) {
+    let detail = '';
+
+    try {
+      const contentType = res.headers.get('content-type') ?? '';
+      if (contentType.includes('application/json')) {
+        const body = await res.json() as { error?: string; message?: string };
+        detail = body.error ?? body.message ?? '';
+      } else {
+        detail = (await res.text()).trim();
+      }
+    } catch {
+      // Ignore response-body parsing errors and fall back to status text.
+    }
+
+    const summary = `API error: ${res.status} ${res.statusText}`;
+    throw new Error(detail ? `${summary} - ${detail}` : summary);
+  }
+
   return res.json();
 }
 
@@ -42,6 +63,8 @@ export const api = {
   getScanHistory: (limit?: number) =>
     request<ScanResult[]>(`/scans?limit=${limit || 20}`),
   getScan: (id: string) => request<ScanResult>(`/scans/${id}`),
+  getLogHeatmap: (hours = 168) =>
+    request<LogHeatmapBucket[]>(`/scans/heatmap?hours=${hours}`),
 
   // Schedule
   getSchedule: () => request<ScheduleStatusResponse>('/scans/schedule/status'),
@@ -95,7 +118,8 @@ export const api = {
   getPipelineItems: () => request<PipelineItem[]>('/prs/pipeline'),
 
   // Health vitals
-  getHealthVitals: () => request<HealthVitals>('/state/vitals'),
+  getHealthVitals: (timeframe?: VitalsTimeframe) =>
+    request<HealthVitals>(`/state/vitals${timeframe ? `?timeframe=${timeframe}` : ''}`),
 
   // Topology history
   getTopologyHistory: (limit?: number) =>

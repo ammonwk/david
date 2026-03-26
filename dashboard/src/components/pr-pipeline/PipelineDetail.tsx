@@ -10,9 +10,11 @@ import {
   ChevronRight,
   MessageSquare,
   AlertTriangle,
+  Terminal,
 } from 'lucide-react';
 import type { BugReport, PullRequestRecord, AgentRecord } from 'david-shared';
 import { api } from '../../lib/api';
+import { TerminalViewer } from '../agents/TerminalViewer';
 import type { PipelineCardData } from './PipelineCard';
 
 // ── Props ────────────────────────────────────────────────────
@@ -95,6 +97,74 @@ function SectionHeader({
     <div className="flex items-center gap-2 mb-3">
       <Icon className="h-4 w-4 text-[var(--accent-blue)]" />
       <h3 className="text-sm font-semibold text-[var(--text-primary)]">{label}</h3>
+    </div>
+  );
+}
+
+// ── Agent Trace with Embedded Terminal ───────────────────────
+
+function AgentTraceCard({ agent }: { agent: AgentRecord }) {
+  const [showTerminal, setShowTerminal] = useState(false);
+  const isActive = agent.status === 'running' || agent.status === 'queued';
+
+  return (
+    <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] overflow-hidden">
+      <div className="p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center rounded-full bg-[var(--bg-tertiary)] px-2.5 py-0.5 text-xs font-medium text-[var(--text-secondary)] ring-1 ring-[var(--border-color)]">
+              {agent.type}
+            </span>
+            <span
+              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${
+                agent.status === 'completed'
+                  ? 'bg-emerald-500/10 text-emerald-400 ring-emerald-500/20'
+                  : agent.status === 'running'
+                    ? 'bg-blue-500/10 text-blue-400 ring-blue-500/20'
+                    : agent.status === 'failed'
+                      ? 'bg-red-500/10 text-red-400 ring-red-500/20'
+                      : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] ring-[var(--border-color)]'
+              }`}
+            >
+              {agent.status}
+            </span>
+          </div>
+          {agent.restarts > 0 && (
+            <span className="text-xs text-[var(--text-muted)]">
+              {agent.restarts} restart{agent.restarts !== 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+
+        {agent.result && (
+          <p className="mb-2 text-sm leading-relaxed text-[var(--text-secondary)]">
+            {agent.result.summary}
+          </p>
+        )}
+
+        {/* Toggle terminal feed */}
+        {agent._id && (
+          <button
+            onClick={() => setShowTerminal(!showTerminal)}
+            className="flex items-center gap-1.5 text-xs font-medium text-[var(--accent-blue)] transition-colors hover:text-blue-300"
+          >
+            <Terminal className="h-3.5 w-3.5" />
+            {showTerminal ? 'Hide' : 'Show'} conversation
+            {showTerminal ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+          </button>
+        )}
+      </div>
+
+      {/* Embedded terminal viewer */}
+      {showTerminal && agent._id && (
+        <div className="h-80 border-t border-[var(--border-color)]">
+          <TerminalViewer agentId={agent._id} isActive={isActive} />
+        </div>
+      )}
     </div>
   );
 }
@@ -313,42 +383,7 @@ export function PipelineDetail({ card, onClose }: PipelineDetailProps) {
                   <SectionHeader icon={Cpu} label="Agent Trace" />
                   <div className="space-y-2">
                     {agents.map((agent) => (
-                      <div
-                        key={agent._id}
-                        className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] p-4"
-                      >
-                        <div className="mb-2 flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center rounded-full bg-[var(--bg-tertiary)] px-2.5 py-0.5 text-xs font-medium text-[var(--text-secondary)] ring-1 ring-[var(--border-color)]">
-                              {agent.type}
-                            </span>
-                            <span
-                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${
-                                agent.status === 'completed'
-                                  ? 'bg-emerald-500/10 text-emerald-400 ring-emerald-500/20'
-                                  : agent.status === 'running'
-                                    ? 'bg-blue-500/10 text-blue-400 ring-blue-500/20'
-                                    : agent.status === 'failed'
-                                      ? 'bg-red-500/10 text-red-400 ring-red-500/20'
-                                      : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] ring-[var(--border-color)]'
-                              }`}
-                            >
-                              {agent.status}
-                            </span>
-                          </div>
-                          {agent.restarts > 0 && (
-                            <span className="text-xs text-[var(--text-muted)]">
-                              {agent.restarts} restart{agent.restarts !== 1 ? 's' : ''}
-                            </span>
-                          )}
-                        </div>
-
-                        {agent.result && (
-                          <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
-                            {agent.result.summary}
-                          </p>
-                        )}
-                      </div>
+                      <AgentTraceCard key={agent._id} agent={agent} />
                     ))}
                   </div>
                 </section>

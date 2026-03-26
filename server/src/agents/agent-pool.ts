@@ -7,6 +7,10 @@ import type { AgentStatus, AgentRecord, PoolStatusData } from 'david-shared';
 // AgentPool — manages up to N concurrent top-level agents with FIFO overflow
 // ---------------------------------------------------------------------------
 
+export interface AgentPoolServices {
+  createAgent?: (options: ManagedAgentOptions) => ManagedAgent;
+}
+
 export class AgentPool extends EventEmitter {
   // Events:
   // 'agent:started'   -> (agent: ManagedAgent)
@@ -23,10 +27,12 @@ export class AgentPool extends EventEmitter {
   private failed: Map<string, ManagedAgent> = new Map();
   private maxConcurrent: number;
   private shuttingDown: boolean = false;
+  private services: AgentPoolServices;
 
-  constructor(maxConcurrent?: number) {
+  constructor(maxConcurrent?: number, services: AgentPoolServices = {}) {
     super();
     this.maxConcurrent = maxConcurrent ?? config.maxConcurrentAgents;
+    this.services = services;
   }
 
   // ---------------------------------------------------------------------------
@@ -43,7 +49,7 @@ export class AgentPool extends EventEmitter {
       throw new Error('[agent-pool] Cannot submit agents — pool is shutting down');
     }
 
-    const agent = new ManagedAgent(options);
+    const agent = this.services.createAgent?.(options) ?? new ManagedAgent(options);
 
     this.wireAgentEvents(agent);
 

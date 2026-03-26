@@ -414,7 +414,7 @@ function buildClaudeCommand(options: CLILaunchOptions): { binary: string; args: 
 }
 
 function buildCodexCommand(options: CLILaunchOptions): { binary: string; args: string[] } {
-  const args: string[] = ['exec', '--json', '--full-auto'];
+  const args: string[] = ['exec', '--json', '--yolo'];
 
   if (options.systemPrompt) {
     args.push('-c', `developer_instructions=${JSON.stringify(options.systemPrompt)}`);

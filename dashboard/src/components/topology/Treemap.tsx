@@ -42,6 +42,21 @@ interface TooltipState {
   node: TopologyNode | null;
 }
 
+const compactNumber = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
+function clipIdForNode(nodeId: string): string {
+  return `clip-${nodeId.replace(/[^a-zA-Z0-9]/g, '_')}`;
+}
+
+function truncateLabel(label: string, maxChars: number): string {
+  if (maxChars <= 0) return '';
+  if (label.length <= maxChars) return label;
+  return `${label.slice(0, Math.max(1, maxChars - 1))}\u2026`;
+}
+
 // ── Health color helpers ───────────────────────────────────
 
 const HEALTH_COLORS: Record<NodeHealthStatus, { stroke: string; fill: string; solid: string }> = {
@@ -208,7 +223,7 @@ export function Treemap({
 
     // Determine which level of children to show
     const displayDepth = displayRoot.depth;
-    const maxRenderDepth = displayDepth + 2; // show 2 levels deep from current root
+    const maxRenderDepth = displayDepth + 3; // show up to 3 levels deep from current root
 
     // Get all visible descendants
     const visibleNodes = displayRoot.descendants().filter((d) => {
@@ -261,7 +276,7 @@ export function Treemap({
     clipsEnter.append('rect');
 
     clips.merge(clipsEnter)
-      .attr('id', (d) => `clip-${d.data.id.replace(/[^a-zA-Z0-9]/g, '_')}`)
+      .attr('id', (d) => clipIdForNode(d.data.id))
       .select('rect')
       .attr('width', (d) => Math.max(0, cellW(d) - 4))
       .attr('height', (d) => Math.max(0, cellH(d) - 4));
@@ -293,9 +308,7 @@ export function Treemap({
       .attr('pointer-events', 'none');
     cellsEnter.append('text').attr('class', 'cell-label')
       .attr('pointer-events', 'none');
-    cellsEnter.append('text').attr('class', 'cell-sublabel')
-      .attr('pointer-events', 'none');
-    cellsEnter.append('text').attr('class', 'cell-lines')
+    cellsEnter.append('text').attr('class', 'cell-meta')
       .attr('pointer-events', 'none');
     // Activity overlay elements
     cellsEnter.append('rect').attr('class', 'audit-border')
@@ -372,6 +385,7 @@ export function Treemap({
     allCells.select<SVGTextElement>('text.cell-label')
       .attr('x', 6)
       .attr('y', 17)
+      .attr('clip-path', (d) => `url(#${clipIdForNode(d.data.id)})`)
       .attr('fill', 'var(--text-primary)')
       .attr('font-size', (d) => {
         const w = cellW(d);
@@ -383,52 +397,42 @@ export function Treemap({
         const w = cellW(d);
         const h = cellH(d);
         if (w <= 50 || h <= 24) return '';
-        const maxChars = Math.floor(w / 7);
-        if (d.data.name.length > maxChars) {
-          return d.data.name.slice(0, Math.max(1, maxChars - 1)) + '\u2026';
+        let metaText = '';
+        if (w > 210) {
+          metaText = `${d.data.fileCount.toLocaleString()} file${d.data.fileCount !== 1 ? 's' : ''} · ${d.data.totalLines.toLocaleString()} lines`;
+        } else if (w > 150) {
+          metaText = `${d.data.fileCount.toLocaleString()}f · ${compactNumber.format(d.data.totalLines)} lines`;
+        } else if (w > 110) {
+          metaText = `${compactNumber.format(d.data.totalLines)} lines`;
         }
-        return d.data.name;
+        const reservedWidth = metaText ? Math.min(w * 0.5, metaText.length * 6 + 16) : 0;
+        const maxChars = Math.floor((w - 12 - reservedWidth) / 7);
+        return truncateLabel(d.data.name, maxChars);
       })
       .transition().duration(T).ease(ease)
-      .attr('opacity', (d) => (cellW(d) > 50 && cellH(d) > 24 ? 0.9 : 0));
+      .attr('opacity', (d) => (cellW(d) > 50 && cellH(d) > 24 ? 0.96 : 0));
 
-    // ── Sub-labels: file count ──
-    allCells.select<SVGTextElement>('text.cell-sublabel')
-      .attr('x', 6)
+    // ── Inline metadata: file and line counts ──
+    allCells.select<SVGTextElement>('text.cell-meta')
+      .attr('x', (d) => Math.max(6, cellW(d) - 6))
       .attr('y', 17)
-      .attr('dy', '1.3em')
-      .attr('fill', 'var(--text-muted)')
-      .attr('font-size', '10px')
+      .attr('clip-path', (d) => `url(#${clipIdForNode(d.data.id)})`)
+      .attr('text-anchor', 'end')
+      .attr('fill', 'var(--text-secondary)')
+      .attr('font-size', (d) => (d.depth === displayDepth + 1 ? '10px' : '9px'))
+      .attr('font-weight', '500')
       .text((d) => {
         const w = cellW(d);
         const h = cellH(d);
-        if (w <= 70 || h <= 40 || d.depth !== displayDepth + 1) return '';
+        if (w <= 110 || h <= 24) return '';
         const fc = d.data.fileCount;
         const lines = d.data.totalLines;
-        return `${fc} file${fc !== 1 ? 's' : ''} \u00b7 ${lines.toLocaleString()} lines`;
+        if (w > 210) return `${fc.toLocaleString()} file${fc !== 1 ? 's' : ''} · ${lines.toLocaleString()} lines`;
+        if (w > 150) return `${fc.toLocaleString()}f · ${compactNumber.format(lines)} lines`;
+        return `${compactNumber.format(lines)} lines`;
       })
       .transition().duration(T).ease(ease)
-      .attr('opacity', (d) =>
-        cellW(d) > 70 && cellH(d) > 40 && d.depth === displayDepth + 1 ? 0.7 : 0,
-      );
-
-    // ── Sub-labels: line count for leaf cells ──
-    allCells.select<SVGTextElement>('text.cell-lines')
-      .attr('x', 6)
-      .attr('y', 17)
-      .attr('dy', '1.2em')
-      .attr('fill', 'var(--text-muted)')
-      .attr('font-size', '9px')
-      .text((d) => {
-        const w = cellW(d);
-        const h = cellH(d);
-        if (w <= 60 || h <= 36 || d.depth <= displayDepth + 1) return '';
-        return `${d.data.totalLines.toLocaleString()} lines`;
-      })
-      .transition().duration(T).ease(ease)
-      .attr('opacity', (d) =>
-        cellW(d) > 60 && cellH(d) > 36 && d.depth > displayDepth + 1 ? 0.6 : 0,
-      );
+      .attr('opacity', (d) => (cellW(d) > 110 && cellH(d) > 24 ? 0.88 : 0));
 
     // ── Activity overlay: animated audit border ──
     allCells.select<SVGRectElement>('rect.audit-border')

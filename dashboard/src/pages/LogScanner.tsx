@@ -6,6 +6,7 @@ import type {
   SREState,
   ScanTimeSpan,
   SeverityFilter,
+  LogHeatmapBucket,
 } from 'david-shared';
 import {
   Search,
@@ -35,6 +36,7 @@ export function LogScanner() {
   } = useScanConfig();
 
   const [scanHistory, setScanHistory] = useState<ScanResult[]>([]);
+  const [heatmapBuckets, setHeatmapBuckets] = useState<LogHeatmapBucket[] | undefined>(undefined);
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -58,6 +60,15 @@ export function LogScanner() {
     }
   }, []);
 
+  const fetchHeatmap = useCallback(async () => {
+    try {
+      const buckets = await api.getLogHeatmap(168);
+      setHeatmapBuckets(buckets);
+    } catch {
+      setHeatmapBuckets(undefined);
+    }
+  }, []);
+
   // Fetch SRE state for known issues
   const fetchSREState = useCallback(async () => {
     try {
@@ -75,7 +86,8 @@ export function LogScanner() {
   useEffect(() => {
     fetchHistory();
     fetchSREState();
-  }, [fetchHistory, fetchSREState]);
+    fetchHeatmap();
+  }, [fetchHeatmap, fetchHistory, fetchSREState]);
 
   // Listen for real-time scan events
   useSocketEvent<{ scanId: string }>('scan:started', () => {
@@ -89,12 +101,14 @@ export function LogScanner() {
     setScanProgress(null);
     fetchHistory();
     fetchSREState();
+    fetchHeatmap();
   });
 
   useSocketEvent<{ scanId: string }>('scan:failed', () => {
     setIsScanning(false);
     setScanProgress(null);
     fetchHistory();
+    fetchHeatmap();
   });
 
   // Handle triggering a scan
@@ -201,6 +215,7 @@ export function LogScanner() {
       {/* ── Heatmap Timeline ─────────────────────────────────────── */}
       <HeatmapTimeline
         scanHistory={scanHistory}
+        heatmapData={heatmapBuckets}
         onCellClick={handleHeatmapClick}
       />
 

@@ -115,6 +115,13 @@ export interface LogPattern {
   lastOccurrence: Date;
 }
 
+/** Aggregated log volume for one hour/severity bucket in the heatmap. */
+export interface LogHeatmapBucket {
+  hour: Date;
+  severity: 'error' | 'warn' | 'info';
+  count: number;
+}
+
 /** Resource metrics collected from ECS during a scan window. */
 export interface ECSMetrics {
   cpuMax: number;
@@ -592,10 +599,18 @@ export interface PipelineItem {
 // Health Vitals
 // ============================================
 
+export type VitalsTimeframe = '5m' | '60m' | '24h' | '1w';
+
+export interface VitalsPoint {
+  timestamp: string;
+  value: number;
+}
+
 /** Time-series data for the Command Center health vitals charts. */
 export interface HealthVitals {
-  errorRate24h: Array<{ timestamp: Date; value: number }>;
-  agentThroughput24h: Array<{ timestamp: Date; value: number }>;
-  queueDepth24h: Array<{ timestamp: Date; value: number }>;
-  prAcceptanceRate7d: Array<{ timestamp: Date; value: number }>;
+  errorRate: VitalsPoint[];
+  agentThroughput: VitalsPoint[];
+  queueDepth: VitalsPoint[];
+  prAcceptance: VitalsPoint[];
+  timeframe: VitalsTimeframe;
 }

@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
-import type { ScanResult } from 'david-shared';
+import type { LogHeatmapBucket, ScanResult } from 'david-shared';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -7,6 +7,7 @@ import type { ScanResult } from 'david-shared';
 
 interface HeatmapTimelineProps {
   scanHistory: ScanResult[];
+  heatmapData?: LogHeatmapBucket[];
   onCellClick: (start: Date, end: Date) => void;
 }
 
@@ -83,9 +84,19 @@ function classifySeverity(level: string): 'error' | 'warn' | 'info' {
 
 function aggregateCounts(
   scanHistory: ScanResult[],
+  heatmapData?: LogHeatmapBucket[],
 ): Map<string, number> {
   // key = `${hourTimestamp}:${severity}`, value = count
   const map = new Map<string, number>();
+
+  if (heatmapData) {
+    for (const bucket of heatmapData) {
+      const hourTs = getHourBucket(new Date(bucket.hour));
+      const key = `${hourTs}:${bucket.severity}`;
+      map.set(key, (map.get(key) || 0) + bucket.count);
+    }
+    return map;
+  }
 
   for (const scan of scanHistory) {
     if (!scan.logPatterns) continue;
@@ -129,7 +140,7 @@ function formatDayLabel(date: Date): string {
 // Component
 // ---------------------------------------------------------------------------
 
-export function HeatmapTimeline({ scanHistory, onCellClick }: HeatmapTimelineProps) {
+export function HeatmapTimeline({ scanHistory, heatmapData, onCellClick }: HeatmapTimelineProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [tooltip, setTooltip] = useState<TooltipState>({
     visible: false,
@@ -139,7 +150,10 @@ export function HeatmapTimeline({ scanHistory, onCellClick }: HeatmapTimelinePro
   });
 
   const hourBuckets = useMemo(() => buildHourBuckets(), []);
-  const countMap = useMemo(() => aggregateCounts(scanHistory), [scanHistory]);
+  const countMap = useMemo(
+    () => aggregateCounts(scanHistory, heatmapData),
+    [scanHistory, heatmapData],
+  );
 
   // Compute max count for color scaling
   const maxCount = useMemo(() => {

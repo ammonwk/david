@@ -14,6 +14,7 @@ import {
   getCLIBackend,
   initializeRuntimeSettings,
 } from './runtime/runtime-settings.js';
+import { installTimestampedConsole } from './logging/install-timestamped-console.js';
 
 // Import API routes
 import scansRouter from './api/scans.js';
@@ -59,6 +60,7 @@ function killOrphanedAgentProcesses(): void {
 }
 
 async function main() {
+  installTimestampedConsole();
   console.log('David AI SRE starting up...');
 
   // 0. Kill orphaned agent processes from a previous crash

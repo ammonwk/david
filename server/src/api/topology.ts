@@ -14,6 +14,7 @@ router.get('/', async (req, res) => {
     if (!topology) return res.json(null);
     res.json(topology);
   } catch (err: any) {
+    console.error('[API] GET /topology failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -26,6 +27,7 @@ router.post('/map', async (req, res) => {
     const topologyId = await codebaseMapper.mapCodebase();
     res.json({ topologyId });
   } catch (err: any) {
+    console.error('[API] POST /topology/map failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -45,6 +47,7 @@ router.post('/audit', async (req, res) => {
 
     res.json({ auditId });
   } catch (err: any) {
+    console.error('[API] POST /topology/audit failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -60,6 +63,7 @@ router.get('/history', async (req, res) => {
       .lean();
     res.json(topologies);
   } catch (err: any) {
+    console.error('[API] GET /topology/history failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
