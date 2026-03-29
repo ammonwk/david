@@ -56,9 +56,13 @@ describe('agents API router', () => {
         failedCount: 0,
       }),
       getAgents: vi.fn().mockReturnValue([liveAgent.toRecord()]),
+      getAgentsWithHistory: vi.fn().mockResolvedValue([liveAgent.toRecord()]),
       getQueue: vi.fn().mockReturnValue([{ _id: 'queued-1', status: 'queued' }]),
       getAgent: vi.fn().mockReturnValue(undefined),
+      getAgentWithHistory: vi.fn().mockResolvedValue(undefined),
       stopAgent: vi.fn(),
+      getMaxConcurrent: vi.fn().mockReturnValue(2),
+      setMaxConcurrent: vi.fn().mockResolvedValue(undefined),
     };
 
     const app = createJsonApp(createAgentsRouter({
@@ -90,9 +94,13 @@ describe('agents API router', () => {
     const agentPool = {
       getStatus: vi.fn(),
       getAgents: vi.fn(),
+      getAgentsWithHistory: vi.fn().mockResolvedValue([]),
       getQueue: vi.fn(),
       getAgent: vi.fn().mockReturnValue(liveAgent),
+      getAgentWithHistory: vi.fn().mockReturnValue(liveAgent),
       stopAgent: vi.fn().mockResolvedValue(true),
+      getMaxConcurrent: vi.fn().mockReturnValue(30),
+      setMaxConcurrent: vi.fn().mockResolvedValue(undefined),
     };
 
     const app = createJsonApp(createAgentsRouter({
@@ -111,6 +119,7 @@ describe('agents API router', () => {
 
   it('falls back to MongoDB when the agent is no longer live', async () => {
     const created = await AgentModel.create({
+      _id: 'historical-1',
       type: 'fix',
       status: 'completed',
       taskId: 'task-historical',
@@ -124,9 +133,17 @@ describe('agents API router', () => {
     const agentPool = {
       getStatus: vi.fn(),
       getAgents: vi.fn(),
+      getAgentsWithHistory: vi.fn().mockResolvedValue([]),
       getQueue: vi.fn(),
       getAgent: vi.fn().mockReturnValue(undefined),
+      getAgentWithHistory: vi.fn().mockImplementation(async (id: string) => {
+        // Simulate pool fallback to MongoDB for historical agents
+        const doc = await AgentModel.findById(id).lean();
+        return doc ?? undefined;
+      }),
       stopAgent: vi.fn().mockResolvedValue(false),
+      getMaxConcurrent: vi.fn().mockReturnValue(30),
+      setMaxConcurrent: vi.fn().mockResolvedValue(undefined),
     };
 
     const app = createJsonApp(createAgentsRouter({

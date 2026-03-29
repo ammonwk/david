@@ -70,6 +70,7 @@ describe('state API router', () => {
     });
     await models.AgentModel.create([
       {
+        _id: 'agent-running',
         type: 'fix',
         status: 'running',
         taskId: 'task-running',
@@ -80,6 +81,7 @@ describe('state API router', () => {
         createdAt: now,
       },
       {
+        _id: 'agent-queued',
         type: 'fix',
         status: 'queued',
         taskId: 'task-queued',
