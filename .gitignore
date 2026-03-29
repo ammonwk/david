@@ -5,4 +5,4 @@ worktrees/
 *.log
 .DS_Store
 
-coverage
+coverageshared/tsconfig.tsbuildinfo
