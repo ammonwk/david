@@ -31,6 +31,25 @@ export function createAgentsRouter(deps: AgentsRouterDeps) {
   }
   });
 
+// GET /api/agents/pool/max-concurrent — get the current max concurrent limit
+  router.get('/pool/max-concurrent', (_req, res) => {
+    res.json({ maxConcurrent: deps.agentPool.getMaxConcurrent() });
+  });
+
+// PUT /api/agents/pool/max-concurrent — update the max concurrent limit
+  router.put('/pool/max-concurrent', async (req, res) => {
+    try {
+      const { maxConcurrent } = req.body;
+      if (typeof maxConcurrent !== 'number' || !Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 50) {
+        return res.status(400).json({ error: 'maxConcurrent must be an integer between 1 and 50' });
+      }
+      await deps.agentPool.setMaxConcurrent(maxConcurrent);
+      res.json(deps.agentPool.getStatus());
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
 // GET /api/agents/:id — get a specific agent
   router.get('/:id', async (req, res) => {
   try {

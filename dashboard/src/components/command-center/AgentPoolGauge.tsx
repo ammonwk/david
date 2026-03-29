@@ -1,9 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bot, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { Bot, CheckCircle, XCircle, Clock, Minus, Plus } from 'lucide-react';
 import type { AgentRecord, AgentType, AgentStatus } from 'david-shared';
 import { usePoolStatus } from '../../hooks/useSocket';
 import { useAgents } from '../../hooks/useAgents';
+import { api } from '../../lib/api';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,48 @@ export function AgentPoolGauge() {
   const { agents, loading } = useAgents();
   const [tooltip, setTooltip] = useState<{ data: TooltipData; x: number; y: number } | null>(null);
 
+  // Max concurrent stepper state
+  const [localMax, setLocalMax] = useState<number | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync from server WS updates (only when not mid-edit)
+  useEffect(() => {
+    if (!updating && poolStatus?.maxConcurrent != null) {
+      setLocalMax(poolStatus.maxConcurrent);
+    }
+  }, [poolStatus?.maxConcurrent, updating]);
+
+  // Fetch initial value on mount
+  useEffect(() => {
+    api.getMaxConcurrent().then(({ maxConcurrent }) => {
+      setLocalMax(prev => prev ?? maxConcurrent);
+    }).catch(() => {});
+  }, []);
+
+  const commitMaxChange = useCallback((newVal: number) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setUpdating(true);
+    debounceRef.current = setTimeout(() => {
+      api.setMaxConcurrent(newVal)
+        .catch(() => {
+          // Revert on error
+          if (poolStatus?.maxConcurrent != null) {
+            setLocalMax(poolStatus.maxConcurrent);
+          }
+        })
+        .finally(() => setUpdating(false));
+    }, 400);
+  }, [poolStatus?.maxConcurrent]);
+
+  const handleMaxChange = useCallback((delta: number) => {
+    setLocalMax(prev => {
+      const next = Math.max(1, Math.min(50, (prev ?? MAX_POOL) + delta));
+      commitMaxChange(next);
+      return next;
+    });
+  }, [commitMaxChange]);
+
   // Separate active (running/starting) vs queued vs recently completed
   const { activeAgents, queuedAgents, recentCompletions } = useMemo(() => {
     const active: AgentRecord[] = [];
@@ -116,7 +159,7 @@ export function AgentPoolGauge() {
 
   const activeCount = poolStatus?.activeCount ?? activeAgents.length;
   const queuedCount = poolStatus?.queuedCount ?? queuedAgents.length;
-  const maxPool = poolStatus?.maxConcurrent ?? MAX_POOL;
+  const maxPool = localMax ?? poolStatus?.maxConcurrent ?? MAX_POOL;
 
   // Build segment data: active agents first, then queued, then empty
   const segments = useMemo(() => {
@@ -257,8 +300,24 @@ export function AgentPoolGauge() {
             <p className="text-xl font-bold text-[var(--accent-yellow)]">{queuedCount}</p>
           </div>
           <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-2">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--text-muted)]">Capacity</p>
-            <p className="text-xl font-bold text-[var(--text-secondary)]">{maxPool - activeCount - queuedCount}</p>
+            <p className="text-[10px] font-medium uppercase tracking-wider text-[var(--text-muted)]">Max Concurrent</p>
+            <div className="flex items-center gap-2 mt-1">
+              <button
+                onClick={() => handleMaxChange(-1)}
+                disabled={maxPool <= 1}
+                className="flex h-6 w-6 items-center justify-center rounded border border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-primary)] disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <Minus className="h-3 w-3" />
+              </button>
+              <span className="text-xl font-bold text-[var(--text-secondary)] min-w-[2ch] text-center">{maxPool}</span>
+              <button
+                onClick={() => handleMaxChange(1)}
+                disabled={maxPool >= 50}
+                className="flex h-6 w-6 items-center justify-center rounded border border-[var(--border-color)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-primary)] disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
           </div>
 
           {/* Legend */}

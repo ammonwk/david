@@ -35,6 +35,12 @@ function resolvePathValue(value: string | undefined, fallback?: string): string 
 }
 
 export function createConfig(env: NodeJS.ProcessEnv) {
+  const targetRepoUrl = requireEnv('TARGET_REPO_URL', env);
+
+  // Derive owner/repo from TARGET_REPO_URL when not explicitly set.
+  // Supports: https://github.com/owner/repo.git, git@github.com:owner/repo.git
+  const repoMatch = targetRepoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
+
   return {
     // Server
     port: parseInt(env.PORT || '3001', 10),
@@ -44,7 +50,7 @@ export function createConfig(env: NodeJS.ProcessEnv) {
     mongodbUri: env.MONGODB_URI || 'mongodb://localhost:27017/david',
 
     // Target repository
-    targetRepoUrl: requireEnv('TARGET_REPO_URL', env),
+    targetRepoUrl,
     baseBranch: env.BASE_BRANCH || 'staging',
 
     // AWS
@@ -55,8 +61,8 @@ export function createConfig(env: NodeJS.ProcessEnv) {
 
     // GitHub
     githubToken: env.GITHUB_TOKEN || '',
-    githubOwner: env.GITHUB_OWNER || 'AiAutomatrix',
-    githubRepo: env.GITHUB_REPO || 'ai-outbound-agent',
+    githubOwner: env.GITHUB_OWNER || repoMatch?.[1] || 'AiAutomatrix',
+    githubRepo: env.GITHUB_REPO || repoMatch?.[2] || 'ai-outbound-agent',
 
     // OpenRouter
     openrouterApiKey: env.OPENROUTER_API_KEY || '',
@@ -65,7 +71,7 @@ export function createConfig(env: NodeJS.ProcessEnv) {
 
     // Agent pool
     maxConcurrentAgents: parseInt(env.MAX_CONCURRENT_AGENTS || '5', 10),
-    agentTimeoutMs: parseInt(env.AGENT_TIMEOUT_MS || '3600000', 10),
+    agentTimeoutMs: parseInt(env.AGENT_TIMEOUT_MS || '10800000', 10),
     agentMaxRestarts: parseInt(env.AGENT_MAX_RESTARTS || '3', 10),
     agentRestartBackoffMs: [5000, 15000, 45000],
 
@@ -94,6 +100,7 @@ export function createConfig(env: NodeJS.ProcessEnv) {
     defaultSeverityFilter: 'all' as const,
     defaultScanCron: '*/5 * * * *',
     defaultAuditCron: '0 3 * * *',
+    defaultAuditGranularity: (env.AUDIT_GRANULARITY || 'L3') as 'L1' | 'L2' | 'L3',
   } as const;
 }
 

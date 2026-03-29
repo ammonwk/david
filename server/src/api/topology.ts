@@ -35,14 +35,14 @@ router.post('/map', async (req, res) => {
 // POST /api/topology/audit — trigger audit for selected nodes (or all)
 router.post('/audit', async (req, res) => {
   try {
-    const { nodeIds } = req.body as TriggerAuditRequest;
+    const { nodeIds, granularity } = req.body as TriggerAuditRequest;
     const { auditEngine } = await import('../engine/audit-engine.js');
 
     let auditId: string;
     if (nodeIds && nodeIds.length > 0) {
-      auditId = await auditEngine.auditSelectedNodes(nodeIds);
+      auditId = await auditEngine.auditSelectedNodes(nodeIds, granularity);
     } else {
-      auditId = await auditEngine.runFullAudit();
+      auditId = await auditEngine.runFullAudit(granularity);
     }
 
     res.json({ auditId });

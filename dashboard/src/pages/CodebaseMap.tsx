@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import type { TopologyNode, BugReport, PullRequestRecord } from 'david-shared';
+import type { TopologyNode, BugReport, PullRequestRecord, AuditGranularity } from 'david-shared';
 import { useTopology } from '../hooks/useTopology';
 import { useAgents } from '../hooks/useAgents';
 import { Treemap } from '../components/topology/Treemap';
@@ -42,6 +42,7 @@ export function CodebaseMap() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [activityOverlayVisible, setActivityOverlayVisible] = useState(false);
   const [zoomPath, setZoomPath] = useState<TopologyNode[]>([]);
+  const [auditGranularity, setAuditGranularity] = useState<AuditGranularity>('L3');
 
   // Data for detail drawer
   const [bugReports, setBugReports] = useState<BugReport[]>([]);
@@ -141,9 +142,9 @@ export function CodebaseMap() {
 
   const handleAuditNode = useCallback(
     (nodeId: string) => {
-      triggerAudit([nodeId]);
+      triggerAudit([nodeId], auditGranularity);
     },
-    [triggerAudit],
+    [triggerAudit, auditGranularity],
   );
 
   const handleClearSelection = useCallback(() => {
@@ -152,19 +153,19 @@ export function CodebaseMap() {
   }, [setSelectedNodes]);
 
   const handleAuditAll = useCallback(() => {
-    triggerAudit();
-  }, [triggerAudit]);
+    triggerAudit(undefined, auditGranularity);
+  }, [triggerAudit, auditGranularity]);
 
   const handleAuditSelected = useCallback(() => {
     if (selectionMode && selectedNodeIds.length > 0) {
-      triggerAudit(selectedNodeIds);
+      triggerAudit(selectedNodeIds, auditGranularity);
       setSelectionMode(false);
       setSelectedNodes([]);
     } else {
       // Enter selection mode
       setSelectionMode(true);
     }
-  }, [triggerAudit, selectedNodeIds, selectionMode, setSelectedNodes]);
+  }, [triggerAudit, selectedNodeIds, selectionMode, setSelectedNodes, auditGranularity]);
 
   // Summary stats
   const stats = useMemo(() => {
@@ -257,6 +258,23 @@ export function CodebaseMap() {
             <Scan className="h-4 w-4" />
             Audit All
           </button>
+
+          {/* Granularity selector */}
+          <div className="flex items-center rounded-lg ring-1 ring-[var(--border-color)]" title="Agent granularity — one agent per node at this level">
+            {(['L1', 'L2', 'L3'] as AuditGranularity[]).map((level) => (
+              <button
+                key={level}
+                onClick={() => setAuditGranularity(level)}
+                className={`px-2.5 py-2 text-xs font-medium transition-all duration-150 first:rounded-l-lg last:rounded-r-lg ${
+                  auditGranularity === level
+                    ? 'bg-purple-500/20 text-purple-400'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+                }`}
+              >
+                {level}
+              </button>
+            ))}
+          </div>
 
           <button
             onClick={() => setActivityOverlayVisible((v) => !v)}

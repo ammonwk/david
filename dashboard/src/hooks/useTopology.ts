@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import type { CodebaseTopology, TopologyNode, TopologyNodeLevel, TriggerAuditRequest, TopologyEventData } from 'david-shared';
+import type { CodebaseTopology, TopologyNode, TopologyNodeLevel, TriggerAuditRequest, TopologyEventData, AuditGranularity } from 'david-shared';
 import { api } from '../lib/api';
 import { useSocketEvent } from './useSocket';
 
@@ -54,10 +54,12 @@ export function useTopology() {
     }
   }, []);
 
-  const triggerAudit = useCallback(async (nodeIds?: string[]) => {
+  const triggerAudit = useCallback(async (nodeIds?: string[], granularity?: AuditGranularity) => {
     try {
       setError(null);
-      const req: TriggerAuditRequest = nodeIds ? { nodeIds } : {};
+      const req: TriggerAuditRequest = {};
+      if (nodeIds) req.nodeIds = nodeIds;
+      if (granularity) req.granularity = granularity;
       return await api.triggerAudit(req);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to trigger audit');

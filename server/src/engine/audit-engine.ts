@@ -1,36 +1,37 @@
 import { execSync } from 'child_process';
 import { agentPool } from '../agents/agent-pool.js';
-import { buildAuditAgentPrompt } from '../agents/prompts.js';
+import { renderPrompt, formatLearningContext } from '../agents/prompt-templates.js';
 import { socketManager } from '../ws/socket-manager.js';
 import { CodebaseTopologyModel, BugReportModel, PullRequestModel, SREStateModel } from '../db/models.js';
 import { learningEngine } from '../pr/learning-engine.js';
-import { createPR, getPRDiff } from '../pr/pr-manager.js';
+import { createOrFindPR, getPRDiff } from '../pr/pr-manager.js';
 import { config } from '../config.js';
-import type { TopologyNode, CodebaseTopology } from 'david-shared';
+import type { TopologyNode, CodebaseTopology, AuditGranularity } from 'david-shared';
 import type { ManagedAgent } from '../agents/managed-agent.js';
 
 export class AuditEngine {
 
-  // Run a full codebase audit (all L3 nodes)
-  async runFullAudit(): Promise<string> {
+  // Run a full codebase audit at the given granularity (default: config)
+  async runFullAudit(granularity?: AuditGranularity): Promise<string> {
     const topology = await CodebaseTopologyModel.getLatest() as unknown as CodebaseTopology | null;
     if (!topology) throw new Error('No codebase topology available. Run mapping first.');
 
-    const l3Nodes = topology.nodes.filter(n => n.level === 3);
-    return this.auditNodes(l3Nodes, topology);
+    const targetLevel = this.granularityToLevel(granularity);
+    const nodes = topology.nodes.filter(n => n.level === targetLevel);
+    return this.auditNodes(nodes, topology);
   }
 
   // Audit specific nodes (selected from UI)
-  async auditSelectedNodes(nodeIds: string[]): Promise<string> {
+  async auditSelectedNodes(nodeIds: string[], granularity?: AuditGranularity): Promise<string> {
     const topology = await CodebaseTopologyModel.getLatest() as unknown as CodebaseTopology | null;
     if (!topology) throw new Error('No codebase topology available.');
 
-    // Resolve selected nodes — if an L1 or L2 is selected, expand to its L3 children
-    const l3Nodes = this.resolveToL3Nodes(nodeIds, topology);
-    return this.auditNodes(l3Nodes, topology);
+    const targetLevel = this.granularityToLevel(granularity);
+    const nodes = this.resolveToLevel(nodeIds, topology, targetLevel);
+    return this.auditNodes(nodes, topology);
   }
 
-  // Core: dispatch audit agents for a set of L3 nodes
+  // Core: dispatch audit agents for a set of topology nodes at the target granularity
   private async auditNodes(nodes: TopologyNode[], topology: CodebaseTopology): Promise<string> {
     const auditId = `audit-${Date.now()}`;
 
@@ -45,7 +46,7 @@ export class AuditEngine {
     const sreState = await SREStateModel.getOrCreateState();
     const topologySummary = this.formatTopologySummary(topology);
 
-    // 3. For each L3 node, create and submit an audit agent
+    // 3. For each node, create and submit an audit agent
     //    Worktrees are created lazily — only when the agent is dequeued and starts.
     const agentPromises = nodes.map(async (node) => {
       // Get learning context for this area
@@ -56,17 +57,24 @@ export class AuditEngine {
 
       const bugId = `audit-${node.id}-${Date.now()}`;
 
-      // Submit to agent pool with lazy worktree + deferred prompt
+      // Pre-compute the learning section
+      const learningSection = formatLearningContext(learning);
+      const fileList = node.files.map((f) => `  - ${f}`).join('\n');
+
+      // Submit to agent pool with lazy worktree + deferred prompt (loaded from DB)
       return agentPool.submit({
         id: `agent-audit-${node.id}-${Date.now()}`,
         type: 'audit',
-        prompt: (repoPath: string) => buildAuditAgentPrompt({
-          node,
+        prompt: (repoPath: string) => renderPrompt('audit', {
+          nodeName: node.name,
+          nodeDescription: node.description,
+          nodeId: node.id,
+          fileList,
           topologySummary,
           sreState: JSON.stringify(sreState),
           repoPath,
           mongoUri: config.mongodbUri,
-          learning,
+          learningSection,
         }),
         cwd: process.cwd(), // placeholder — overridden by lazy worktree
         taskId: auditId,
@@ -87,39 +95,66 @@ export class AuditEngine {
     return auditId;
   }
 
-  // Resolve selected node IDs to L3 nodes
-  // If an L1 or L2 is selected, expand to all its L3 descendants
-  private resolveToL3Nodes(nodeIds: string[], topology: CodebaseTopology): TopologyNode[] {
+  // Convert granularity string to numeric level
+  private granularityToLevel(granularity?: AuditGranularity): number {
+    const g = granularity ?? config.defaultAuditGranularity;
+    return g === 'L1' ? 1 : g === 'L2' ? 2 : 3;
+  }
+
+  // Resolve selected node IDs to nodes at the target level.
+  // If a selected node is above the target level, expand to descendants at that level.
+  // If a selected node is at or below the target level, find its ancestor at the target level.
+  private resolveToLevel(nodeIds: string[], topology: CodebaseTopology, targetLevel: number): TopologyNode[] {
     const nodesMap = new Map(topology.nodes.map(n => [n.id, n]));
-    const l3Nodes = new Set<TopologyNode>();
+    const result = new Set<TopologyNode>();
 
     for (const id of nodeIds) {
       const node = nodesMap.get(id);
       if (!node) continue;
 
-      if (node.level === 3) {
-        l3Nodes.add(node);
+      if (node.level === targetLevel) {
+        result.add(node);
+      } else if (node.level < targetLevel) {
+        // Node is above target — expand to descendants at target level
+        this.findDescendantsAtLevel(node, nodesMap, targetLevel, result);
       } else {
-        // Find all L3 descendants
-        this.findL3Descendants(node, nodesMap, l3Nodes);
+        // Node is below target — find its ancestor at target level
+        const ancestor = this.findAncestorAtLevel(node, nodesMap, targetLevel);
+        if (ancestor) result.add(ancestor);
       }
     }
 
-    return [...l3Nodes];
+    return [...result];
   }
 
-  // Recursively find L3 descendants
-  private findL3Descendants(
+  // Recursively find descendants at the specified level
+  private findDescendantsAtLevel(
     node: TopologyNode,
     nodesMap: Map<string, TopologyNode>,
+    targetLevel: number,
     result: Set<TopologyNode>
   ): void {
     for (const childId of node.children) {
       const child = nodesMap.get(childId);
       if (!child) continue;
-      if (child.level === 3) result.add(child);
-      else this.findL3Descendants(child, nodesMap, result);
+      if (child.level === targetLevel) result.add(child);
+      else if (child.level < targetLevel) this.findDescendantsAtLevel(child, nodesMap, targetLevel, result);
     }
+  }
+
+  // Walk up the tree to find the ancestor at the target level
+  private findAncestorAtLevel(
+    node: TopologyNode,
+    nodesMap: Map<string, TopologyNode>,
+    targetLevel: number,
+  ): TopologyNode | null {
+    let current = node;
+    while (current.level > targetLevel && current.parentId) {
+      const parent = nodesMap.get(current.parentId);
+      if (!parent) return null;
+      current = parent;
+    }
+    return current.level === targetLevel ? current : null;
   }
 
   // Track completion of all agents in an audit
@@ -301,8 +336,8 @@ export class AuditEngine {
             fix.riskAssessment ? `\n## Risk Assessment\n\n${fix.riskAssessment}` : '',
           ].filter(Boolean).join('\n');
 
-          // Push and create PR (createPR handles commit + push internally)
-          const prResult = await createPR({
+          // Create PR or find the one the agent already created
+          const prResult = await createOrFindPR({
             bugId: bugReportId,
             bugReport: bugReport.toObject() as any,
             worktreePath,

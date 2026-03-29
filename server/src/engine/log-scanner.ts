@@ -9,12 +9,12 @@
 import { randomUUID } from 'crypto';
 import { prefetch } from './prefetch.js';
 import { agentPool } from '../agents/agent-pool.js';
-import { buildLogAnalysisPrompt, buildFixAgentPrompt } from '../agents/prompts.js';
-import type { LearningContext } from '../agents/prompts.js';
+import { renderPrompt, formatLearningContext } from '../agents/prompt-templates.js';
+import type { LearningContext } from '../agents/prompt-templates.js';
 import { socketManager } from '../ws/socket-manager.js';
 import { ScanResultModel, BugReportModel, SREStateModel, CodebaseTopologyModel, PullRequestModel } from '../db/models.js';
 import { learningEngine } from '../pr/learning-engine.js';
-import { createPR, getPRDiff } from '../pr/pr-manager.js';
+import { createOrFindPR, getPRDiff } from '../pr/pr-manager.js';
 import { config } from '../config.js';
 import type { ManagedAgent } from '../agents/managed-agent.js';
 import type {
@@ -208,6 +208,7 @@ export class LogScanner {
     // 6. Build the analysis agent prompt (deferred — needs worktree path)
     const logData = this.formatLogData(prefetchResult.logPatterns, prefetchResult.rawLogEvents);
     const sreStateStr = this.formatSREState(sreState);
+    const learningSection = formatLearningContext(learning);
 
     // 7. Submit the analysis agent with a lazy snapshot worktree
     const agentId = randomUUID();
@@ -218,14 +219,14 @@ export class LogScanner {
       agent = await agentPool.submit({
         id: agentId,
         type: 'log-analysis',
-        prompt: (repoPath: string) => buildLogAnalysisPrompt({
-          scanConfig,
+        prompt: (repoPath: string) => renderPrompt('log-analysis', {
+          timeSpan: scanConfig.timeSpan,
           logData,
           sreState: sreStateStr,
           topologySummary,
           repoPath,
           mongoUri: config.mongodbUri,
-          learning,
+          learningSection,
         }),
         cwd: process.cwd(), // placeholder — overridden by lazy worktree
         taskId,
@@ -319,17 +320,23 @@ export class LogScanner {
       { $set: { status: 'fixing' as BugReportStatus, fixAgentId: agentId } },
     );
 
+    // Pre-compute template variables
+    const bugDescription = `${bugReport.pattern}\n\nSuspected root cause: ${bugReport.suspectedRootCause}`;
+    const verificationDetails = bugReport.verificationResult
+      ? `Method: ${bugReport.verificationResult.method}\nConfirmed: ${bugReport.verificationResult.confirmed}\nDetails: ${bugReport.verificationResult.details}`
+      : 'No verification performed yet — the bug was identified during log analysis.';
+    const fileList = bugReport.affectedFiles.map((f: string) => `  - ${f}`).join('\n');
+    const learningSection = formatLearningContext(learning);
+
     const agent = await agentPool.submit({
       id: agentId,
       type: 'fix',
-      prompt: (repoPath: string) => buildFixAgentPrompt({
-        bugDescription: `${bugReport.pattern}\n\nSuspected root cause: ${bugReport.suspectedRootCause}`,
-        verificationDetails: bugReport.verificationResult
-          ? `Method: ${bugReport.verificationResult.method}\nConfirmed: ${bugReport.verificationResult.confirmed}\nDetails: ${bugReport.verificationResult.details}`
-          : 'No verification performed yet — the bug was identified during log analysis.',
-        affectedFiles: bugReport.affectedFiles,
+      prompt: (repoPath: string) => renderPrompt('fix', {
+        bugDescription,
+        verificationDetails,
+        fileList,
         repoPath,
-        learning,
+        learningSection,
       }),
       cwd: process.cwd(), // placeholder — overridden by lazy worktree
       taskId,
@@ -691,7 +698,7 @@ export class LogScanner {
             result.summary ?? 'Automated fix applied by David SRE.',
           ].join('\n');
 
-          const prResult = await createPR({
+          const prResult = await createOrFindPR({
             bugId: bugReportId,
             bugReport: { ...bugReport.toObject(), _id: String(bugReport._id) } as BugReport,
             worktreePath,

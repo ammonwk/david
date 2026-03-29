@@ -17,6 +17,9 @@ import type {
   AgentResult,
   PullRequestRecord,
   LearningRecord,
+  PromptTemplate,
+  PromptTemplateVersion,
+  PromptVariable,
 } from 'david-shared';
 
 // ============================================
@@ -411,4 +414,49 @@ learningRecordSchema.index({ bugCategory: 1, wasAccepted: 1, createdAt: 1 });
 export const LearningRecordModel = mongoose.model<LearningRecordDocument>(
   'LearningRecord',
   learningRecordSchema,
+);
+
+// ============================================
+// Prompt Templates
+// ============================================
+
+const PromptVariableSchema = new Schema<PromptVariable>(
+  {
+    name: { type: String, required: true },
+    description: { type: String, required: true },
+  },
+  { _id: false },
+);
+
+const PromptTemplateVersionSchema = new Schema<PromptTemplateVersion>(
+  {
+    version: { type: Number, required: true },
+    body: { type: String, required: true },
+    editedAt: { type: Date, required: true },
+    changeDescription: { type: String },
+  },
+  { _id: false },
+);
+
+interface PromptTemplateDocument extends Omit<PromptTemplate, '_id'>, mongoose.Document<string> {
+  _id: string;
+}
+
+const promptTemplateSchema = new Schema<PromptTemplateDocument>(
+  {
+    _id: { type: String, required: true },
+    name: { type: String, required: true },
+    description: { type: String, required: true },
+    body: { type: String, required: true },
+    variables: { type: [PromptVariableSchema], default: [] },
+    versions: { type: [PromptTemplateVersionSchema], default: [] },
+    updatedAt: { type: Date, required: true },
+    createdAt: { type: Date, required: true },
+  },
+  { collection: 'prompt_templates' },
+);
+
+export const PromptTemplateModel = mongoose.model<PromptTemplateDocument>(
+  'PromptTemplate',
+  promptTemplateSchema,
 );

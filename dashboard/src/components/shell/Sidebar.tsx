@@ -6,6 +6,7 @@ import {
   Map,
   Bot,
   GitPullRequest,
+  ScrollText,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -26,6 +27,7 @@ const navItems: NavItem[] = [
   { to: '/map', icon: Map, label: 'Codebase Map', shortcut: '3' },
   { to: '/agents', icon: Bot, label: 'Agent Monitor', shortcut: '4' },
   { to: '/prs', icon: GitPullRequest, label: 'PR Pipeline', shortcut: '5' },
+  { to: '/prompts', icon: ScrollText, label: 'Agent Prompts', shortcut: '6' },
 ];
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import { LogScanner } from './pages/LogScanner';
 import { CodebaseMap } from './pages/CodebaseMap';
 import { AgentMonitor } from './pages/AgentMonitor';
 import { PRPipeline } from './pages/PRPipeline';
+import { PromptEditor } from './pages/PromptEditor';
 
 export function App() {
   return (
@@ -19,6 +20,7 @@ export function App() {
             <Route path="/map" element={<CodebaseMap />} />
             <Route path="/agents" element={<AgentMonitor />} />
             <Route path="/prs" element={<PRPipeline />} />
+            <Route path="/prompts" element={<PromptEditor />} />
           </Route>
         </Routes>
       </ToastProvider>

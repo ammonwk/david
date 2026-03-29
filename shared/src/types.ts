@@ -67,6 +67,9 @@ export type PRResolution = 'accepted' | 'rejected';
 /** Depth in the codebase topology tree (1 = root area, 2 = module, 3 = leaf). */
 export type TopologyNodeLevel = 1 | 2 | 3;
 
+/** Granularity at which audit agents are dispatched (one agent per node at this level). */
+export type AuditGranularity = 'L1' | 'L2' | 'L3';
+
 // ============================================
 // SRE State (singleton document)
 // ============================================
@@ -339,6 +342,8 @@ export interface AuditScheduleConfig {
   enabled: boolean;
   /** Cron expression (default: daily). */
   cronExpression: string;
+  /** Agent dispatch granularity — one agent per node at this level. Defaults to 'L3'. */
+  granularity?: AuditGranularity;
 }
 
 // ============================================
@@ -446,8 +451,10 @@ export interface TriggerScanRequest {
 
 /** Request body to trigger an on-demand codebase audit. */
 export interface TriggerAuditRequest {
-  /** Specific topology node IDs to audit. If empty/undefined, all L3 nodes are audited. */
+  /** Specific topology node IDs to audit. If empty/undefined, all nodes at the given granularity are audited. */
   nodeIds?: string[];
+  /** Agent dispatch granularity — one agent per node at this level. Defaults to 'L3'. */
+  granularity?: AuditGranularity;
 }
 
 /** Request body to update scan and/or audit schedules. */
@@ -557,6 +564,48 @@ export interface OverviewStats {
 
 /** Light/dark/system theme preference. */
 export type ThemeMode = 'light' | 'dark' | 'system';
+
+// ============================================
+// Prompt Templates
+// ============================================
+
+/** Identifiers for editable agent prompt templates. */
+export type PromptType = 'log-analysis' | 'audit' | 'verify' | 'fix' | 'pr-description';
+
+/** A single version snapshot of a prompt template body. */
+export interface PromptTemplateVersion {
+  version: number;
+  body: string;
+  editedAt: Date;
+  changeDescription?: string;
+}
+
+/** Describes a variable placeholder available in a prompt template. */
+export interface PromptVariable {
+  name: string;
+  description: string;
+}
+
+/**
+ * An editable agent prompt template stored in MongoDB.
+ * The body uses {{variableName}} placeholders that are interpolated at runtime.
+ */
+export interface PromptTemplate {
+  _id: string; // Same as PromptType
+  name: string;
+  description: string;
+  body: string;
+  variables: PromptVariable[];
+  versions: PromptTemplateVersion[];
+  updatedAt: Date;
+  createdAt: Date;
+}
+
+/** Request body to update a prompt template. */
+export interface UpdatePromptTemplateRequest {
+  body: string;
+  changeDescription?: string;
+}
 
 // ============================================
 // Command Palette

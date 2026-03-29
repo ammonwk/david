@@ -137,7 +137,7 @@ export function CommandPalette() {
       {
         id: 'action-audit',
         label: 'Trigger Codebase Audit',
-        description: 'Audit all L3 topology nodes',
+        description: 'Audit all topology nodes at configured granularity',
         category: 'Actions',
         icon: ShieldCheck,
         onSelect: () => {

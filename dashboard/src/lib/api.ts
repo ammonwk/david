@@ -18,6 +18,9 @@ import type {
   VitalsTimeframe,
   RuntimeSettings,
   UpdateRuntimeSettingsRequest,
+  PoolStatusData,
+  PromptTemplate,
+  UpdatePromptTemplateRequest,
 } from 'david-shared';
 
 const BASE_URL = '/api';
@@ -91,6 +94,13 @@ export const api = {
     request<{ output: string[] }>(`/agents/${id}/output`),
   stopAgent: (id: string) =>
     request<void>(`/agents/${id}/stop`, { method: 'POST' }),
+  getMaxConcurrent: () =>
+    request<{ maxConcurrent: number }>('/agents/pool/max-concurrent'),
+  setMaxConcurrent: (maxConcurrent: number) =>
+    request<PoolStatusData>('/agents/pool/max-concurrent', {
+      method: 'PUT',
+      body: JSON.stringify({ maxConcurrent }),
+    }),
 
   // PRs
   getPRs: (filters?: { status?: string; scanType?: string; agentId?: string }) => {
@@ -124,4 +134,22 @@ export const api = {
   // Topology history
   getTopologyHistory: (limit?: number) =>
     request<CodebaseTopology[]>(`/topology/history?limit=${limit || 10}`),
+
+  // Prompt Templates
+  getPrompts: () => request<PromptTemplate[]>('/prompts'),
+  getPrompt: (id: string) => request<PromptTemplate>(`/prompts/${id}`),
+  updatePrompt: (id: string, update: UpdatePromptTemplateRequest) =>
+    request<PromptTemplate>(`/prompts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(update),
+    }),
+  revertPrompt: (id: string, version: number) =>
+    request<PromptTemplate>(`/prompts/${id}/revert`, {
+      method: 'POST',
+      body: JSON.stringify({ version }),
+    }),
+  resetPrompt: (id: string) =>
+    request<PromptTemplate>(`/prompts/${id}/reset`, {
+      method: 'POST',
+    }),
 };

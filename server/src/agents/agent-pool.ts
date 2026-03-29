@@ -188,6 +188,122 @@ export class AgentPool extends EventEmitter {
     return this.active.size < this.maxConcurrent;
   }
 
+  /**
+   * Get the current max concurrent limit.
+   */
+  getMaxConcurrent(): number {
+    return this.maxConcurrent;
+  }
+
+  /**
+   * Dynamically update the max concurrent agent limit.
+   *
+   * - If scaling up: drains the queue to fill newly available slots.
+   * - If scaling down below current active count: excess agents are stopped,
+   *   requeued at the front of the queue, and will resume (via --resume)
+   *   when a slot opens.
+   */
+  async setMaxConcurrent(n: number): Promise<void> {
+    if (!Number.isInteger(n) || n < 1) {
+      throw new Error('maxConcurrent must be a positive integer');
+    }
+
+    const old = this.maxConcurrent;
+    this.maxConcurrent = n;
+
+    if (n > old) {
+      // Scaling up — start queued agents that now fit
+      this.drainQueue();
+    } else if (n < this.active.size) {
+      // Scaling down below current active count — evict excess agents
+      await this.evictExcessAgents(this.active.size - n);
+    }
+
+    this.emitPoolStatus();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Eviction (for setMaxConcurrent scale-down)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Stop the N most recently started agents, remove them from active,
+   * and requeue them at the front of the queue so they resume when a
+   * slot opens.
+   */
+  private async evictExcessAgents(count: number): Promise<void> {
+    // Pick the most recently started agents (LIFO — least work done)
+    const sorted = [...this.active.values()].sort((a, b) => {
+      const aTime = a.toRecord().startedAt
+        ? new Date(a.toRecord().startedAt!).getTime()
+        : 0;
+      const bTime = b.toRecord().startedAt
+        ? new Date(b.toRecord().startedAt!).getTime()
+        : 0;
+      return bTime - aTime; // most recent first
+    });
+
+    const toEvict = sorted.slice(0, count);
+
+    // 1. Remove from active FIRST so handleAgentDone no-ops
+    for (const agent of toEvict) {
+      this.active.delete(agent.id);
+    }
+
+    // 2. Stop all evicted agents in parallel
+    await Promise.all(
+      toEvict.map(agent =>
+        agent.stop().catch(err => {
+          console.error(`[agent-pool] Error stopping evicted agent ${agent.id}:`, err);
+        }),
+      ),
+    );
+
+    // 3. Rebuild submission options and requeue at front
+    const requeued: ManagedAgent[] = [];
+    for (const agent of toEvict) {
+      const record = agent.toRecord();
+      try {
+        const options: ManagedAgentOptions = {
+          id: agent.id,
+          type: record.type,
+          prompt: record.prompt ?? '',
+          cwd: record.worktreePath ?? process.cwd(),
+          taskId: record.taskId,
+          nodeId: record.nodeId ?? undefined,
+          parentAgentId: record.parentAgentId ?? undefined,
+          worktreePath: record.worktreePath ?? undefined,
+          branch: record.branch ?? undefined,
+          cliSessionId: record.cliSessionId ?? undefined,
+          timeoutMs: record.timeoutMs,
+          maxRestarts: record.maxRestarts,
+          systemPrompt: record.systemPrompt ?? undefined,
+          worktreeConfig:
+            record.worktreeType && record.worktreeIdentifier
+              ? { type: record.worktreeType, identifier: record.worktreeIdentifier }
+              : undefined,
+        };
+
+        const newAgent =
+          this.services.createAgent?.(options) ?? new ManagedAgent(options);
+        this.wireAgentEvents(newAgent);
+        this.persistAgent(newAgent);
+        requeued.push(newAgent);
+      } catch (err) {
+        console.error(`[agent-pool] Failed to requeue agent ${record._id}:`, err);
+      }
+    }
+
+    // Unshift requeued agents to front of queue (they get priority)
+    this.queue.unshift(...requeued);
+    for (const agent of requeued) {
+      this.emit('agent:queued', agent);
+      console.log(
+        `[agent-pool] Agent ${agent.id} evicted and requeued (active=${this.active.size}, queued=${this.queue.length})`,
+      );
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------

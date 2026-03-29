@@ -22,6 +22,7 @@ import stateRouter from './api/state.js';
 import agentsRouter from './api/agents.js';
 import topologyRouter from './api/topology.js';
 import prsRouter from './api/prs.js';
+import promptsRouter from './api/prompts.js';
 
 /**
  * Kill orphaned Claude agent processes left behind by a previous crash.
@@ -107,6 +108,7 @@ async function main() {
   app.use('/api/agents', agentsRouter);
   app.use('/api/topology', topologyRouter);
   app.use('/api/prs', prsRouter);
+  app.use('/api/prompts', promptsRouter);
 
   // 3. Create HTTP server and attach Socket.IO
   const server = createServer(app);
@@ -164,6 +166,11 @@ async function main() {
     await connectDB();
     console.log('[startup] MongoDB connected');
 
+    startupPhase = 'seeding prompt templates';
+    const { seedDefaultPrompts } = await import('./agents/prompt-templates.js');
+    await seedDefaultPrompts();
+    console.log('[startup] Prompt templates ready');
+
     startupPhase = 'loading runtime settings';
     await initializeRuntimeSettings();
     console.log(`[startup] Agent backend: ${getCLIBackend()}`);
@@ -199,11 +206,12 @@ async function main() {
       {
         enabled: true,
         cronExpression: config.defaultAuditCron,
+        granularity: config.defaultAuditGranularity,
       },
       async () => {
         try {
           const { auditEngine } = await import('./engine/audit-engine.js');
-          await auditEngine.runFullAudit();
+          await auditEngine.runFullAudit(config.defaultAuditGranularity);
         } catch (err) {
           console.error('Scheduled audit failed:', err);
         }

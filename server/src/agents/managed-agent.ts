@@ -548,15 +548,31 @@ export class ManagedAgent extends EventEmitter {
       const obj = JSON.parse(raw);
       if (typeof obj !== 'object' || obj === null) return null;
 
-      // The only required field is `summary`.
-      if (typeof obj.summary !== 'string') return null;
+      // Support both the generic AgentResult format ({ summary, fixesApplied, ... })
+      // and the fix-agent output format ({ description, fixed, ... }).
+      const summary = typeof obj.summary === 'string'
+        ? obj.summary
+        : typeof obj.description === 'string'
+          ? obj.description
+          : null;
+
+      if (summary === null) return null;
+
+      // Fix agents report "fixed: true/false" rather than "fixesApplied: N".
+      const fixesApplied = typeof obj.fixesApplied === 'number'
+        ? obj.fixesApplied
+        : obj.fixed === true
+          ? 1
+          : obj.fixed === false
+            ? 0
+            : undefined;
 
       return {
         bugsFound: typeof obj.bugsFound === 'number' ? obj.bugsFound : undefined,
         bugsVerified: typeof obj.bugsVerified === 'number' ? obj.bugsVerified : undefined,
-        fixesApplied: typeof obj.fixesApplied === 'number' ? obj.fixesApplied : undefined,
+        fixesApplied,
         prsCreated: typeof obj.prsCreated === 'number' ? obj.prsCreated : undefined,
-        summary: obj.summary,
+        summary,
       };
     } catch {
       return null;

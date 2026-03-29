@@ -237,6 +237,49 @@ export async function getPRDiff(worktreePath: string): Promise<string> {
 // ============================================
 
 /**
+ * Find an existing open PR for a given branch.
+ * Returns the PR info if found, null otherwise.
+ * Useful for detecting PRs that agents created directly via `gh pr create`.
+ */
+export async function findPRByBranch(branch: string): Promise<PRCreateResult | null> {
+  try {
+    const { data } = await octokit.pulls.list({
+      owner: config.githubOwner,
+      repo: config.githubRepo,
+      state: 'open',
+      head: `${config.githubOwner}:${branch}`,
+      per_page: 1,
+    });
+
+    if (data.length === 0) return null;
+
+    return {
+      prNumber: data[0].number,
+      prUrl: data[0].html_url,
+      branch: data[0].head.ref,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Create a PR or find the existing one if the agent already created it.
+ * This handles the case where the fix agent runs `gh pr create` directly
+ * before the engine's post-completion handler runs.
+ */
+export async function createOrFindPR(params: CreatePRParams): Promise<PRCreateResult> {
+  // First check if the agent already created a PR for this branch
+  const existing = await findPRByBranch(params.branch);
+  if (existing) {
+    return existing;
+  }
+
+  // No existing PR — create one
+  return createPR(params);
+}
+
+/**
  * List all open PRs created by David (identified by the "autofix" label).
  */
 export async function listOpenPRs(): Promise<
